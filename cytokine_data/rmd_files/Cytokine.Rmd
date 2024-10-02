@@ -1,0 +1,902 @@
+---
+title: "cytokine_data_analysis"
+output: html_document
+date: "2024-09-16"
+author: "Pooja"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+```{r Load Libraries}
+library(data.table)
+library(readxl)
+library(dplyr)
+library(tidyr)
+library(tidyselect)
+library(tidyverse)
+library(ggplot2)
+library(ggpubr)
+library(purrr)
+library(FactoMineR)
+library(factoextra)
+library(Hmisc)
+library(plotly)
+library(ggfortify)
+library(patchwork)
+library(plyr)
+library(table1)
+library(ggh4x)
+library(ggrepel)
+library(gridExtra)
+library(grid)
+library(patchwork)
+library(ComplexHeatmap)
+library(colorRamp2)
+require(dendextend)
+require(installr)
+require(colorspace)
+```
+
+Read the data file
+```{r Get the meta data}
+df <- read_excel("/Users/pooja/Documents/Thesis/cytokine_data/Data/Nenonen2024data_clean.xlsx")
+df_avg <- df %>%
+  mutate(SampleID = gsub(" ", "", SampleID)) %>%
+  group_by(SampleID, Group) %>%
+  dplyr::summarise(across(everything(), ~ mean(.x, na.rm = TRUE)))
+df_m <- df_avg
+```
+
+Make a table to summarise the dataset
+```{r Table1}
+df_m$Group <- factor(df_m$Group, labels=c("Control", "RIF"))
+
+# Define the labels for the table
+label(df_m$Serum_IFNg) <- "Serum_IFNg"
+label(df_m$FF_IFNg) <- "FF_IFNg"
+label(df_m$Serum_TNFa) <- "Serum_TNFa"
+label(df_m$FF_TNFa) <- "FF_TNFa"
+label(df_m$Serum_IL13) <- "Serum_IL13"
+label(df_m$FF_IL13) <- "FF_IL13"
+label(df_m$Serum_IL12p70) <- "Serum_IL12p70"
+label(df_m$FF_IL12p70) <- "FF_IL12p70"
+label(df_m$Serum_IL10) <- "Serum_IL10"
+label(df_m$FF_IL10) <- "FF_IL10"
+label(df_m$Serum_IL8) <-"Serum_IL8"
+label(df_m$FF_IL8) <- "FF_IL8"
+label(df_m$Serum_IL6) <- "Serum_IL6"
+label(df_m$FF_IL6) <- "FF_IL6"
+label(df_m$Serum_IL4) <- "Serum_IL4"
+label(df_m$FF_IL4) <- "FF_IL4"
+label(df_m$Serum_IL2) <- "Serum_IL2"
+label(df_m$FF_IL2) <- "FF_IL2"
+label(df_m$Serum_IL1b) <- "Serum_IL1b"
+label(df_m$FF_IL1b) <- "FF_IL1b"
+
+# Add the sample count and summarize
+table1(~ Serum_IFNg + FF_IFNg + Serum_TNFa + FF_TNFa + Serum_IL13 + FF_IL13 + Serum_IL12p70 + FF_IL12p70 +
+Serum_IL10 + FF_IL10 + Serum_IL8 + FF_IL8 + Serum_IL8 + FF_IL8 + Serum_IL6 + FF_IL6 + Serum_IL4 + FF_IL4 + Serum_IL2 + FF_IL2 + Serum_IL1b +FF_IL1b| Group, data=df_m)
+```
+
+Look at the dataset, to see what is missing
+
+```{r explore}
+# Plot to see subject vs the protein data
+df_rename <- df %>%
+  dplyr::mutate(SampleID = gsub(" ", "", SampleID)) %>%
+  dplyr::group_by(SampleID, Group) %>%
+  dplyr::mutate(has_replicates = ifelse(n() > 1, "yes", "no"),
+         SampleID = paste0(SampleID, "_", row_number())) %>%
+  pivot_longer(cols = starts_with("Serum_") | starts_with("FF_"),
+               names_to = c("SampleType", "Protein"),
+               names_sep = "_",
+               values_to = "Value") %>%
+  dplyr::ungroup()
+
+# Make the values binary to see which subjects have measurements
+df_info <- df_rename %>%
+  group_by(SampleID) %>%
+  mutate(Value = ifelse(is.na(Value), 0, 1)) %>%
+  ungroup()
+
+
+df_rif_info_serum <- df_info %>%
+  filter(Group == "RIF" & SampleType == "Serum")
+
+df_rif_info_ff <- df_info %>%
+  filter(Group == "RIF" & SampleType == "FF")
+
+df_ctrl_info_serum <- df_info %>%
+  filter(Group == "Ctrl" & SampleType == "Serum")
+
+df_ctrl_info_ff <- df_info %>%
+  filter(Group == "Ctrl" & SampleType == "FF")
+```
+
+
+```{r fig.width = 8, fig.show= "hold", out.width= "50%"}
+# Heatmap
+# SERUM, RIF
+
+# Dot plot
+ggplot(df_rif_info_serum, aes(x = SampleID, y = Protein, color = factor(Value))) +
+  geom_point(size = 2, alpha = 0.6) +
+  scale_color_manual(values = c("0" = "white", "1" = "black")) +
+  labs(x = "Sample ID", y = "Protein", color = "Value", title = "Plot for presence of data in RIF subjects, for SERUM samples") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1, size = 5))
+
+# FF, RIF
+
+# Dot plot
+ggplot(df_rif_info_ff, aes(x = SampleID, y = Protein, color = factor(Value))) +
+  geom_point(size = 2, alpha = 0.6) +
+  scale_color_manual(values = c("0" = "white", "1" = "black")) +
+  labs(x = "Sample ID", y = "Protein", color = "Value", title = "Plot for presence of data in RIF subjects, for FF samples") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1, size = 5))
+```
+
+
+
+```{r fig.width = 8, fig.show= "hold", out.width= "50%"}
+# SERUM, CTRL
+
+# Dot plot
+
+ggplot(df_ctrl_info_serum, aes(x = SampleID, y = Protein, color = factor(Value))) +
+  geom_point(size = 2, alpha = 0.6) +
+  scale_color_manual(values = c("0" = "white", "1" = "black")) +
+  labs(x = "Sample ID", y = "Protein", color = "Value", title = "Heatmap for presence of data in Ctrl subjects, for SERUM samples") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1, size = 5))
+
+# FF, CTRL
+
+# Dot plot
+ggplot(df_ctrl_info_ff, aes(x = SampleID, y = Protein, color = factor(Value))) +
+  geom_point(size = 2, alpha = 0.6) +
+  scale_color_manual(values = c("0" = "white", "1" = "black")) +
+  labs(x = "Sample ID", y = "Protein", color = "Value", title = "Plot for presence of data in Control subjects, for FF samples") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1, size = 5))
+
+
+```
+
+```{r fig.width = 8, fig.show= "hold", out.width= "50%"}
+df_na <- na.omit(df) # Remove NAs
+
+pca_result <- prcomp(df_na[,-(1:2)], center = TRUE, scale = TRUE)
+#summary(pca_result)
+
+# Plot the PCA
+
+# scatterplot
+#autoplot(pca_result, data = df_na, colour = 'Group')
+
+# factoextra
+fviz_pca_ind(pca_result,
+             geom.ind = "point",
+             col.ind = df_na$Group,
+             palette = c("#00AFBB", "#E7B800"),
+             addEllipses = TRUE, label = "none",
+             title = "PCA - Cytokine Data",
+             legend.title = "Group")
+
+# Create the biplot with arrows for variables
+fviz_pca_var(pca_result, repel = TRUE)
+```
+
+
+```{r fig.width = 8, fig.show= "hold", out.width= "50%"}
+# Perform PCA for serum samples and FF samples individually
+# Serum
+serum_data <- df_na %>%
+  select(starts_with("Serum")) %>%
+  bind_cols(df_na %>% select(SampleID, Group)) %>%
+  drop_na()
+pca_res_serum <- prcomp(serum_data[,-(11:12)], center = TRUE, scale = TRUE)
+
+# PLot PCA
+fviz_pca_ind(pca_res_serum,
+              geom.ind = "point",
+              col.ind = serum_data$Group,
+              addEllipses = TRUE,
+              legend.title = "Group") +
+  labs(title = "PCA of Serum Samples by Group") +
+  theme_minimal()
+
+# Biplot
+fviz_pca_var(pca_res_serum, repel = TRUE)
+```
+
+
+```{r fig.width = 8, fig.show= "hold", out.width= "50%"}
+# FF
+ff_data <- df_na %>%
+  select(starts_with("FF")) %>%
+  bind_cols(df_na %>% select(SampleID, Group)) %>%
+  drop_na()
+pca_res_ff <- prcomp(ff_data[,-(11:12)], center = TRUE, scale = TRUE)
+
+# PLot PCA
+fviz_pca_ind(pca_res_ff,
+              geom.ind = "point",
+              col.ind = ff_data$Group,
+              addEllipses = TRUE,
+              legend.title = "Group") +
+  labs(title = "PCA of FF Samples by Group") +
+  theme_minimal()
+
+# Biplot
+fviz_pca_var(pca_res_ff, repel = TRUE)
+```
+
+```{r Variance explained, echo= FALSE, fig.keep= "none"}
+# If you want to visualise the variance explained by the PCA
+# Plot the variance explained by each PC
+fviz_eig(pca_result, addlabels = TRUE, ylim = c(0, 50))
+fviz_eig(pca_res_serum, addlabels = TRUE, ylim = c(0, 50))
+fviz_eig(pca_res_ff, addlabels = TRUE, ylim = c(0, 50))
+
+```
+
+Average the values and perform PCA
+
+```{r}
+df_avg <- df %>%
+  mutate(SampleID = gsub(" ", "", SampleID)) %>%
+  group_by(SampleID, Group) %>%
+  dplyr::summarise(across(everything(), ~ mean(.x, na.rm = TRUE)))
+
+df_avg <- na.omit(df_avg)
+
+serum_data <- df_avg %>%
+  group_by(Group) %>%
+  select(starts_with("Serum"))
+
+ff_data <- df_avg %>%
+    group_by(Group) %>%
+  select(starts_with("FF"))
+```
+
+
+```{r}
+# Perform PCA on the averaged data
+options(ggrepel.max.overlaps = Inf)
+
+
+pca_result <- prcomp(df_avg[,-(1:2)], center = TRUE, scale = TRUE)
+#summary(pca_result)
+pca_res_serum <- prcomp(serum_data[,-(1)], center = TRUE, scale = TRUE)
+#summary(pca_res_serum)
+pca_res_ff <- prcomp(ff_data[,-(1)], center = TRUE, scale = TRUE)
+#summary(pca_res_ff)
+
+# PLot PCA
+a_plot <- autoplot(pca_result, data = df_avg, colour = 'Group') +
+  scale_color_manual(values = c("#595959", "#eb4fb2")) + 
+  theme_minimal() +
+  labs(title = "PCA")+
+  geom_text_repel(aes(label = SampleID), size = 3)
+a_plot
+```
+
+```{r, fig.width = 8, fig.show= "hold", out.width= "50%"}
+fviz_pca_ind(pca_result,
+              geom.ind = "point",
+              col.ind = df_avg$Group,
+              label= "SampleID", 
+              #habillage=df_avg$Group,
+              addEllipses = TRUE,
+              legend.title = "Group") +
+  #scale_color_manual(values = c("Purple", "Orange")) +
+  labs(title = "PCA of all Samples by Group") +
+  theme_minimal()
+
+var_plot <- fviz_pca_var(pca_result, repel = TRUE)
+var_plot
+#autoplot(pca_res_serum, data = serum_data, colour = 'Group')
+```
+
+
+```{r, fig.width = 8, fig.show= "hold", out.width= "50%"}
+fviz_pca_ind(pca_res_serum,
+              geom.ind = "point",
+              col.ind = serum_data$Group,
+              addEllipses = TRUE,
+              legend.title = "Group") +
+  labs(title = "PCA of Serum Samples by Group") +
+  theme_minimal()
+
+fviz_pca_var(pca_res_serum, repel = TRUE)
+```
+
+
+```{r, fig.width = 8, fig.show= "hold", out.width= "50%"}
+#autoplot(pca_res_ff, data = ff_data, colour = 'Group')
+
+fviz_pca_ind(pca_res_ff,
+              geom.ind = "point",
+              col.ind = ff_data$Group,
+              addEllipses = TRUE,
+              legend.title = "Group") +
+  labs(title = "PCA of FF Samples by Group") +
+  theme_minimal()
+
+fviz_pca_var(pca_res_ff, repel = TRUE)
+```
+
+Heatmap
+```{r}
+df_group <- df %>%
+  dplyr::mutate(SampleID = gsub(" ", "", SampleID)) %>%
+  dplyr::group_by(SampleID, Group) %>%
+  dplyr::summarise(
+    across(where(is.numeric), ~ mean(.x,, na.rm = TRUE)),
+    .groups = 'drop'
+  ) %>%
+  dplyr::mutate(
+    across(where(is.numeric), ~ scale(.x, center = TRUE, scale = TRUE)[, 1])
+  )
+
+df_group<- na.omit(df_group)
+
+df_ordered <- df_group %>%
+  arrange(factor(Group, levels = c("Ctrl", "RIF")),
+          factor(SampleID, levels = setdiff(SampleID, c(285, 24, 495, 46))),
+          factor(SampleID, levels = c(285, 24, 495, 46)))
+
+data_matrix <- as.matrix(df_ordered[, c("SampleID", "FF_IL12p70", "FF_IL4", "FF_TNFa", "Serum_IL13", "Serum_IL6", "Serum_IL8")])
+
+rownames(data_matrix) <- data_matrix[, "SampleID"]
+
+data_matrix <- data_matrix[, -1]
+
+data_matrix <- t(data_matrix)
+
+og_rownames <- rownames(data_matrix)
+
+data_matrix_numeric <- as.matrix(data_matrix)  
+data_matrix_numeric <- apply(data_matrix_numeric, 2, as.numeric)
+
+# 3. Set the original row names back
+rownames(data_matrix_numeric) <- og_rownames
+
+color_function <- colorRamp2(c(min(data_matrix_numeric),0, max(data_matrix_numeric)),
+                             c("blue","white","red"))
+
+ordered_sample_ids <- df_ordered$SampleID
+```
+
+
+```{r, fig.height=2, fig.width=6}
+wo_clust <- Heatmap(data_matrix_numeric,
+        name = "Value",
+        cluster_rows = FALSE,
+        cluster_columns = FALSE,
+        show_row_names = TRUE,
+        show_column_names = TRUE,
+        row_title = "Proteins",
+        column_title = "Samples",
+        column_order = match(ordered_sample_ids, colnames(data_matrix)),
+        col = color_function,
+        column_names_gp = gpar(fontsize = 6), 
+        row_names_gp = gpar(fontsize = 6), 
+        width = unit(4, "in"),   
+        height = unit(1, "in"))
+wo_clust
+```
+
+```{r, fig.height=3, fig.width=6}
+
+
+dist_matrix_cols <- dist(t(data_matrix_numeric), method = "euclidean")
+
+hc_cols <- hclust(dist_matrix_cols, method = "ward.D2")
+
+#plot(hc_cols, main = "Hierarchical Clustering of Samples", xlab = "", sub = "", cex = 0.9)
+
+color_group_list <- c("RIF" = "#eb4fb2", "Ctrl" = "#595959")
+
+group_levels <- factor(df_avg$Group, levels = names(color_group_list))
+column_anno <- HeatmapAnnotation(
+  Group = group_levels
+)
+
+# Define the colors
+#cluster_colors <- c("#1f77b4","#ff7f0e", "#2ca02c", "#d62728")  
+#row_dend = as.dendrogram(hc_cols)
+#row_dend = color_branches(row_dend, k = 4)  
+
+hc_heatmap <- Heatmap(data_matrix_numeric,
+        name = "Value",
+        cluster_rows = FALSE,
+        cluster_columns = TRUE,
+        column_split = 4,
+        show_row_names = TRUE,
+        show_column_names = TRUE,
+        row_title = "Proteins",
+        column_title = "Samples H-clustered",
+        column_order = hc_cols$order,
+        col = color_function,
+        column_names_gp = gpar(fontsize = 6),
+        row_names_gp = gpar(fontsize = 6),
+        column_labels = colnames(data_matrix_numeric), 
+        width = unit(4, "in"),   
+        height = unit(1, "in"), 
+        top_annotation = column_anno) 
+hc_heatmap
+```
+
+```{r, echo=FALSE, results='hide', fig.keep='none'}
+pdf(file = "PCA_plots.pdf", width = 10, height = 10)
+
+# Arrange and plot both a_plot and var_plot in the PDF
+a_plot + var_plot  
+wo_clust
+hc_heatmap
+# Close the PDF device
+dev.off()
+```
+
+```{r, echo=FALSE, results='hide', fig.keep='none'}
+pdf(file = "Heatmap_plot.pdf", width = 10, height = 10)
+
+wo_clust
+
+# Close the PDF device
+dev.off()
+```
+```{r, echo=FALSE, results='hide', fig.keep='none'}
+pdf(file = "Heatmap_hc_plot.pdf", width = 10, height = 10)
+
+hc_heatmap
+
+# Close the PDF device
+dev.off()
+```
+
+K means clustering
+```{r}
+set.seed(123)
+km.out <- kmeans(pca_result$x, centers = 4, nstart = 20)
+df_avg$cluster_id <- factor(km.out$cluster)
+df_avg$PC1 <- pca_result$x[, 1] 
+df_avg$PC2 <- pca_result$x[, 2]  
+
+# Add cluster IDs to the dataframe as a factor
+df_avg$cluster_id <- factor(km.out$cluster)
+
+# Create a scatter plot of the PCA results colored by cluster
+ggplot(df_avg, aes(x = PC1, y = PC2, color = cluster_id)) +
+    geom_point(alpha = 1) +
+    xlab("PC1") +
+    ylab("PC2") +
+    ggtitle("K-means Clustering") +
+    theme_minimal() + 
+  geom_text_repel(aes(label = SampleID), size = 3)
+
+#fviz_pca_var(pca_result, col.var = "cos2", gradient.cols = c("#00AFBB", "#E7B800", #"#FC4E07"), repel = TRUE)
+
+k_plot <- Heatmap(data_matrix_numeric,
+        name = "Value",
+        cluster_rows = FALSE,
+        cluster_columns = TRUE,
+        column_km = 4,
+        show_row_names = TRUE,
+        show_column_names = TRUE,
+        row_title = "Proteins",
+        column_title = "Samples",
+        column_order = match(ordered_sample_ids, colnames(data_matrix)),
+        col = color_function,
+        column_names_gp = gpar(fontsize = 8))
+k_plot
+```
+
+```{r, echo=FALSE, results='hide', fig.keep='none'}
+pdf(file = "k_means_plots.pdf", width = 10, height = 10)
+
+# Arrange and plot both a_plot and var_plot in the PDF
+k_plot
+
+# Close the PDF device
+dev.off()
+```
+
+Continue to analyse the data.
+
+Remove space in between ID names, and check if the samples have replicates, and pivot the data frame.
+
+```{r Pivot Longer}
+df_long <- df %>%
+  dplyr::mutate(SampleID = gsub(" ", "", SampleID)) %>%
+  dplyr::group_by(SampleID, Group) %>%
+  dplyr::mutate(has_replicates = ifelse(n() > 1, "yes", "no")) %>%
+  pivot_longer(cols = starts_with("Serum_") | starts_with("FF_"),
+                 names_to = c("SampleType", "Protein"),
+                 names_sep = "_",
+                 values_to = "Value") %>%
+  filter(!is.na(Value))
+```
+
+Filter the data for technical replicates, and remove all NAs
+
+```{r Filter replicates}
+df_replicates_only <- df_long %>%
+  filter(has_replicates == "yes")
+```
+
+Plot the data with replicates only to visualise
+
+```{r Box plot}
+ggplot(df_replicates_only, aes(x = SampleType, y = Value, fill = Group)) +
+  geom_boxplot() +
+  facet_wrap(~ Protein, scales = "free") +
+  theme_minimal() +
+  labs(title = "Protein concentration in Serum & FF in RIF and Control groups",
+       x = "Sample Type", y = "Value")
+```
+
+Visualise the correlation between serum and FF in Control and RIF
+```{r}
+data_long <- df_avg %>%
+  group_by(SampleID, Group) %>%
+  pivot_longer(cols = starts_with("Serum_"), names_to = "Protein_Serum", values_to = "Serum_value") %>%
+  pivot_longer(cols = starts_with("FF_"), names_to = "Protein_FF", values_to = "FF_value") %>%
+  filter(substr(Protein_Serum, 6, 15) == substr(Protein_FF, 3, 15))
+
+data_ctrl <- data_long %>% filter(Group == "Ctrl")
+data_rif <- data_long %>% filter(Group == "RIF")
+
+cor_ctrl <- data_ctrl %>%
+  dplyr::group_by(Protein_Serum, Protein_FF) %>%
+  dplyr::summarize(correlation = cor(Serum_value, FF_value))
+
+cor_rif <- data_rif %>%
+  dplyr::group_by(Protein_Serum, Protein_FF) %>%
+  dplyr::summarize(correlation = cor(Serum_value, FF_value))
+
+correlation_data <- bind_rows(
+  cor_ctrl %>% mutate(Group = "Control"),
+  cor_rif %>% mutate(Group = "RIF")
+)
+
+ggplot(data_long, aes(x = Serum_value, y = FF_value, color = Group)) +
+  geom_point(size = 0.9) +
+  geom_smooth(method = "lm", se = FALSE) +
+  facet_wrap(~ Protein_Serum + Protein_FF, scales = "free") +
+  labs(title = "Correlation between Serum and FF for Control and RIF",
+       x = "Serum", y = "FF") +
+  theme_minimal()
+```
+
+Calculate basic summary statistics like, mean, standard devioation and co-efficient of variation for the replicates and visualise
+
+```{r Summary}
+summary_stats <- df_replicates_only %>%
+  group_by(SampleID, Protein, SampleType) %>%
+  dplyr::summarize(
+    Mean = mean(Value, na.rm = TRUE),
+    SD = sd(Value, na.rm = TRUE),
+    CV = ifelse(Mean == 0, NA, (SD / Mean) * 100),
+    Count = n()
+  )
+
+ggplot(summary_stats, aes(x = Protein, y = CV, fill = SampleType)) +
+  geom_col(position = "dodge") +
+  facet_wrap(~ SampleID) +
+  labs(x = "Protein", y = "Coefficient of Variation (%)", title = "Coefficient of Variation for Each Protein") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1, size = 5))
+```
+
+Divide the data into two groups to visualise the variance more clearly with a density plot.
+
+1. RIF with replicates:
+
+```{r RIF}
+
+df_avg <- df %>%
+  mutate(SampleID = gsub(" ", "", SampleID)) %>%
+  group_by(SampleID, Group) %>%
+  dplyr::summarise(across(everything(), ~ mean(.x, na.rm = TRUE)))
+
+df_long_avg <- df_avg %>%
+  pivot_longer(cols = starts_with("Serum_") | starts_with("FF_"),
+                 names_to = c("SampleType", "Protein"),
+                 names_sep = "_",
+                 values_to = "Value") %>%
+  filter(!is.na(Value))
+
+df_RIF <- df_long_avg %>%
+  filter(Group == "RIF")
+
+#rif_m <- ddply(df_RIF, "Protein", summarise, grp.median=median(log(Value)))
+rif_m <- df_RIF %>%
+  dplyr::group_by(Protein, SampleType) %>%
+  dplyr::summarise(grp.median = median(Value), na.rm = TRUE) %>%
+  dplyr::ungroup()
+
+#summary_stats_RIF <- df_RIF %>%
+#  group_by(SampleID, Protein, SampleType) %>%
+#  dplyr::summarize(
+#    Mean = mean(Value, na.rm = TRUE),
+#    SD = sd(Value, na.rm = TRUE),
+#    CV = ifelse(Mean == 0, NA, (SD / Mean) * 100),
+#    Count = n()
+#  )
+#rif_m <- ddply(summary_stats_RIF, "SampleType", summarise, grp.median=median(log(Mean)))
+```
+
+2. RIF (everything):
+
+- Note: No difference from the previous, since most replicates do have a measure/ value.
+```{r RIF (everything), echo = FALSE, results='hide'}
+
+# Since the values are averaged out this section is not needed
+df_RIF_e <- df_long_avg %>%
+  filter(Group == "RIF")
+
+summary_stats_RIF_e <- df_RIF_e %>%
+  group_by(SampleID, Protein, SampleType) %>%
+  dplyr::summarize(
+    Mean = mean(Value, na.rm = TRUE),
+    SD = sd(Value, na.rm = TRUE),
+    CV = ifelse(Mean == 0, NA, (SD / Mean) * 100),
+    Count = n()
+  )
+rif_e_m <- ddply(summary_stats_RIF_e, "SampleType", summarise, grp.median=median(log(Mean)))
+```
+
+
+```{r, echo=FALSE, results= "hide", fig.keep='none'}
+#ggplot(df_RIF, aes(x = Value, fill = SampleType)) +
+#  geom_density(alpha = 0.6) +
+#  facet_wrap(~ Protein, scales = "fixed") +
+#  labs(x = "Value", y = "Density", title = "Density Plot of protein #concentration in RIF") +
+#  theme_minimal() +
+#  theme(legend.position = "top") +
+#  geom_vline(data=rif_m, aes(xintercept=grp.median),
+#             linetype="dashed")
+
+#ggplot(summary_stats_RIF_e, aes(x = log(Mean), fill = SampleType)) +
+#  geom_density(alpha = 0.6) +
+#  facet_wrap(~ Protein, scales = "fixed") +
+#  labs(x = "log transformed Mean", y = "Density", title = "Density Plot of #protein concentration in RIF(including non replicates)") +
+#  theme_minimal() +
+#  theme(legend.position = "top") +
+#  geom_vline(data=rif_e_m, aes(xintercept=grp.median, color=SampleType),
+#             linetype="dashed")
+```
+
+3. Control with replicates :
+
+```{r Control}
+df_Ctrl <- df_long_avg %>%
+  filter(Group == "Ctrl")
+
+#summary_stats_Ctrl <- df_Ctrl %>%
+#  group_by(SampleID, Protein, SampleType) %>%
+#  dplyr::summarize(
+#    Mean = mean(Value, na.rm = TRUE),
+#    SD = sd(Value, na.rm = TRUE),
+#    CV = ifelse(Mean == 0, NA, (SD / Mean) * 100),
+#    Count = n()
+#  )
+#ctrl_m <- ddply(df_Ctrl, "Protein", summarise, grp.median=median(log(Value)))
+ctrl_m <- df_Ctrl %>%
+  dplyr::group_by(Protein, SampleType) %>%
+  dplyr::summarise(grp.median = median(Value), na.rm = TRUE) %>%
+  dplyr::ungroup()
+
+```
+
+- Note: The control groups with replicates have only one measurement of proteins in FF and replicates have no values.
+
+4. Control (everything) :
+Plotting mean values, since most samples dont have replicate values for FF.
+```{r Control (everything), echo = FALSE, results='hide'}
+
+# Not required since the values are averaged
+df_Ctrl_e <- df_long %>%
+  filter(Group == "Ctrl")
+
+summary_stats_Ctrl_e <- df_Ctrl_e %>%
+  group_by(SampleID, Protein, SampleType) %>%
+  dplyr::summarize(
+    Mean = mean(Value, na.rm = TRUE),
+    SD = sd(Value, na.rm = TRUE),
+    CV = ifelse(Mean == 0, NA, (SD / Mean) * 100),
+    Count = n()
+  )
+ctrl_e_m <- ddply(summary_stats_Ctrl_e, "SampleType", summarise, grp.median=median(log(Mean)))
+
+```
+
+
+```{r, fig.height = 10, fig.width = 10, fig.show= "hold", out.width= "50%"}
+gg_ctrl_density <- ggplot(df_Ctrl, aes(x = Value , fill = SampleType))+
+  geom_density(alpha = 0.6) +
+  facet_wrap(~ Protein, scales = "fixed") +
+  labs(x = "log Value", y = "Density", title = "Density Plot of protein concentrations in Control") +
+  theme_minimal() +
+  theme(legend.position = "top") +
+  geom_vline(data=ctrl_m, aes(xintercept=grp.median, color = SampleType),
+             linetype="dashed") +
+  scale_x_log10()
+
+
+gg_ctrl_density
+
+gg_rif_density <- ggplot(df_RIF, aes(x = Value  , fill = SampleType)) +
+  geom_density(alpha = 0.6) +
+  facet_wrap(~ Protein, scales = "fixed") +
+  labs(x = "log Value", y = "Density", title = "Density Plot of protein concentration in RIF") +
+  theme_minimal() +
+  theme(legend.position = "top") +
+  geom_vline(data=rif_m, aes(xintercept=grp.median, color = SampleType),
+             linetype="dashed") +
+  scale_x_log10()
+
+g1_built <- ggplot_build(gg_ctrl_density)
+g2_built <- ggplot_build(gg_rif_density)
+
+# Extract the scales from gg_ctrl_density
+xrange <- g1_built$layout$panel_scales_x[[1]]$range$range
+yrange <- g1_built$layout$panel_scales_y[[1]]$range$range
+
+# Plot the second graph
+gg_rif_density +
+  scale_x_continuous(limits = xrange) +
+  scale_y_continuous(limits = yrange)
+```
+
+```{r, results='hide', fig.keep='none'}
+
+# Prepare data for combined plot
+df_combined <- rbind(
+  transform(df_Ctrl, Condition = "Control"),
+  transform(df_RIF, Condition = "RIF")
+)
+
+median_combined <- rbind(
+  transform(ctrl_m, Condition = "Control"),
+  transform(rif_m, Condition = "RIF")
+)
+
+# Create the plot
+gg_combined_density <- ggplot(df_combined, aes(x = log(Value+1), fill = SampleType)) +
+  geom_density(alpha = 0.6) +
+  facet_nested(Protein ~ Condition, scales = "fixed") +  # Use facet_nested to separate by both Protein and Condition
+  labs(x = "log Value", y = "Density", title = "Density Plot of Protein Concentrations in Control and RIF") +
+  theme_minimal() +
+  theme(legend.position = "top") +
+  geom_vline(data = median_combined, aes(xintercept = grp.median, color = SampleType),
+             linetype = "dashed")
+
+# Print the combined plot
+gg_combined_density
+
+```
+
+
+```{r, echo=FALSE}
+#gg_ctrl_e <- ggplot(summary_stats_Ctrl_e, aes(x = log(Mean), fill = SampleType)) +
+#  geom_density(alpha = 0.6) +
+#  facet_wrap(~ Protein, scales = "fixed") +
+#  labs(x = "log transformed Mean", y = "Density", title = "Density Plot of protein concentrations in Control (including non replicates)") +
+#  theme_minimal() +
+#  theme(legend.position = "top") +
+#  geom_vline(data=ctrl_e_m, aes(xintercept=grp.median, color=SampleType),
+#             linetype="dashed")
+#gg_ctrl # Plot the first graph
+
+# Build plots to exract scales
+#g1_built <- ggplot_build(gg_ctrl)
+#g2_built <- ggplot_build(gg_ctrl_e)
+
+# Extract the scales from gg_ctrl
+#xrange <- g1_built$layout$panel_scales_x[[1]]$range$range
+#yrange <- g1_built$layout$panel_scales_y[[1]]$range$range
+
+# Plot the second graph
+#gg_ctrl_e +
+#  scale_x_continuous(limits = xrange) +
+#  scale_y_continuous(limits = yrange)
+```
+
+ANOVA
+
+Perform ANOVA analysis
+```{r Distribution plot}
+# Plot a histogram to check the distrubtion
+hist(df_long$Value, main = "Histogram of Protein Measurements", xlab = "Protein Measurement", col = "lightblue")
+```
+
+Since the data is not normally distributed, log transform it before performing ANOVA
+
+```{r ANNOVA}
+
+df_long$log_value <- log(df_long$Value + 1) 
+# Adding 1 to avoid log(0)
+hist(df_long$log_value, main = "Histogram of Protein Measurements", xlab = "Protein Measurement", col = "lightblue")
+
+anova_result <- aov(df_long$log_value ~ SampleType, data = df_long)
+summary(anova_result)
+
+# Two-way ANOVA
+t_anova <- aov(df_long$log_value ~ SampleType * Group, data = df_long )
+summary(t_anova)
+```
+The protein measurement is significantly affected by SampleType.
+
+Perform Th1/Th2 ratio analysis
+
+```{r}
+# Store the cytokines as Th1 and Th2
+th_1 <- c("IFNg", "IL1b", "IL2", "TFNa", "IL12", "IL8", "IL12p70")
+th_2 <- c("IL10", "IL13", "IL6")
+
+th1_th2_ratio_df <- df_long %>%
+  dplyr::mutate(Th_Type = case_when(
+    Protein %in% th_1 ~ "Th1",
+    Protein %in% th_2 ~ "Th2",
+    TRUE ~ NA_character_ # If there is a value/ protein that doesn't come under defined protein
+  )) %>%
+  dplyr::filter(!is.na(Th_Type)) %>%
+  dplyr::group_by(SampleID, Group, SampleType, Th_Type) %>%
+  dplyr::summarise(
+    Mean_Value = mean(Value, na.rm = TRUE),
+    Protein_Names = paste(unique(Protein), collapse = ", ")
+  ) %>%
+  pivot_wider(names_from = Th_Type, values_from = c(Mean_Value, Protein_Names)) %>%
+  dplyr::mutate(Th1_Th2_Ratio = Mean_Value_Th1 / Mean_Value_Th2)  %>%
+  dplyr::ungroup()
+
+# Filter them by group
+th1_th2_ratio_rif <- th1_th2_ratio_df %>%
+  filter(Group == "RIF")
+th1_th2_ratio_ctrl <- th1_th2_ratio_df %>%
+  filter(Group == "Ctrl")
+```
+
+```{r, fig.width = 8, fig.show= "hold", out.width= "50%"}
+gg_ctrl <- ggplot(th1_th2_ratio_ctrl, aes(x = Group, y = Th1_Th2_Ratio, fill = SampleType)) +
+  geom_boxplot() +
+  labs(title = "Distribution of Th1/Th2 Ratio in Control",
+       x = "Group",
+       y = "Th1/Th2 Ratio") +
+  theme_minimal()
+
+gg_rif <- ggplot(th1_th2_ratio_rif, aes(x = Group, y = Th1_Th2_Ratio, fill = SampleType)) +
+  geom_boxplot() +
+  labs(title = "Distribution of Th1/Th2 Ratio in RIF",
+       x = "Group",
+       y = "Th1/Th2 Ratio") +
+  theme_minimal()
+
+
+
+gg_ctrl # Plot the first graph
+
+# Build plots to exract scales
+g1_built <- ggplot_build(gg_ctrl)
+g2_built <- ggplot_build(gg_rif)
+
+# Extract the scales from gg_ctrl
+yrange <- g1_built$layout$panel_scales_y[[1]]$range$range
+
+# Plot the second graph
+gg_rif +
+  scale_y_continuous(limits = yrange)
+```
+
+
+```{r session info}
+sessionInfo()
+```
