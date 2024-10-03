@@ -351,7 +351,7 @@ df_ordered <- df_group %>%
           factor(SampleID, levels = setdiff(SampleID, c(285, 24, 495, 46))),
           factor(SampleID, levels = c(285, 24, 495, 46)))
 
-data_matrix <- as.matrix(df_ordered[, c("SampleID", "FF_IL12p70", "FF_IL4", "FF_TNFa", "Serum_IL13", "Serum_IL6", "Serum_IL8")])
+data_matrix <- as.matrix(df_ordered[, c("SampleID", "FF_IL12p70", "FF_IL4", "FF_TNFa", "Serum_TNFa", "Serum_IL13", "Serum_IL6", "Serum_IL8")])
 
 rownames(data_matrix) <- data_matrix[, "SampleID"]
 
@@ -392,20 +392,22 @@ wo_clust <- Heatmap(data_matrix_numeric,
 wo_clust
 ```
 
-```{r, fig.height=3, fig.width=6}
+```{r, fig.height=6, fig.width=6}
 
-
+set.seed(123)
 dist_matrix_cols <- dist(t(data_matrix_numeric), method = "euclidean")
 
 hc_cols <- hclust(dist_matrix_cols, method = "ward.D2")
 
 #plot(hc_cols, main = "Hierarchical Clustering of Samples", xlab = "", sub = "", cex = 0.9)
 
-color_group_list <- c("RIF" = "#eb4fb2", "Ctrl" = "#595959")
+color_group_list <- c("Ctrl" = "#595959", "RIF" = "#eb4fb2")
 
-group_levels <- factor(df_avg$Group, levels = names(color_group_list))
+group_levels <- factor(df_ordered$Group, levels = names(color_group_list))
+
 column_anno <- HeatmapAnnotation(
-  Group = group_levels
+  Group = group_levels, 
+  col = list(Group = color_group_list)
 )
 
 # Define the colors
@@ -413,24 +415,50 @@ column_anno <- HeatmapAnnotation(
 #row_dend = as.dendrogram(hc_cols)
 #row_dend = color_branches(row_dend, k = 4)  
 
-hc_heatmap <- Heatmap(data_matrix_numeric,
+#hc_heatmap <- Heatmap(data_matrix_numeric,
+#        name = "Value",
+#        cluster_rows = FALSE,
+#        cluster_columns = TRUE,
+#        column_split = 4,
+#        show_row_names = TRUE,
+#        show_column_names = TRUE,
+#        row_title = "Proteins",
+#        column_title = "Samples H-clustered",
+#        column_order = hc_cols$order,
+#        col = color_function,
+#        column_names_gp = gpar(fontsize = 6),
+#        row_names_gp = gpar(fontsize = 6),
+#        column_labels = colnames(data_matrix_numeric), 
+#        width = unit(4, "in"),   
+#        height = unit(1, "in"), 
+#        top_annotation = column_anno) 
+#hc_heatmap
+transposed_data_matrix <- t(data_matrix_numeric)
+
+# Adjust the heatmap accordingly
+hc_heatmap <- Heatmap(transposed_data_matrix,
         name = "Value",
-        cluster_rows = FALSE,
-        cluster_columns = TRUE,
-        column_split = 4,
+        cluster_rows = TRUE,   
+        cluster_columns = FALSE,  
+        row_split = 4,  
         show_row_names = TRUE,
         show_column_names = TRUE,
-        row_title = "Proteins",
-        column_title = "Samples H-clustered",
-        column_order = hc_cols$order,
+        row_title = "Samples",  
+        column_title = "Proteins",  
+        row_order = hc_cols$order,  
         col = color_function,
         column_names_gp = gpar(fontsize = 6),
         row_names_gp = gpar(fontsize = 6),
-        column_labels = colnames(data_matrix_numeric), 
-        width = unit(4, "in"),   
-        height = unit(1, "in"), 
-        top_annotation = column_anno) 
+        column_labels = rownames(data_matrix_numeric), 
+        width = unit(1, "in"),  
+        height = unit(4, "in"),   
+        left_annotation = rowAnnotation(
+  Group = group_levels, 
+  col = list(Group = color_group_list)
+)) 
+pdf(file = "H_clust_heatmap.pdf", width = 10, height = 10)
 hc_heatmap
+dev.off()
 ```
 
 ```{r, echo=FALSE, results='hide', fig.keep='none'}
