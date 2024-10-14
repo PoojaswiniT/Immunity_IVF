@@ -1,8 +1,10 @@
 ---
 title: "cytokine_data_analysis"
-output: html_document
-date: "2024-09-16"
 author: "Pooja"
+date: "2024-09-16"
+output:
+  html_document: default
+  pdf_document: default
 ---
 
 ```{r setup, include=FALSE}
@@ -10,7 +12,7 @@ knitr::opts_chunk$set(echo = TRUE)
 ```
 
 
-```{r Load Libraries}
+```{r Load Libraries, message=FALSE, warning=FALSE}
 library(data.table)
 library(readxl)
 library(dplyr)
@@ -38,11 +40,15 @@ library(colorRamp2)
 require(dendextend)
 require(installr)
 require(colorspace)
+library(ggridges)
+library(corrplot)
+library(viridis)
 ```
 
 Read the data file
 ```{r Get the meta data}
 df <- read_excel("/Users/pooja/Documents/Thesis/cytokine_data/Data/Nenonen2024data_clean.xlsx")
+
 df_avg <- df %>%
   mutate(SampleID = gsub(" ", "", SampleID)) %>%
   group_by(SampleID, Group) %>%
@@ -118,7 +124,6 @@ df_ctrl_info_ff <- df_info %>%
 
 
 ```{r fig.width = 8, fig.show= "hold", out.width= "50%"}
-# Heatmap
 # SERUM, RIF
 
 # Dot plot
@@ -302,6 +307,14 @@ var_plot <- fviz_pca_var(pca_result, repel = TRUE)
 var_plot
 #autoplot(pca_res_serum, data = serum_data, colour = 'Group')
 ```
+```{r, echo=FALSE, results='hide', fig.keep='none'}
+pdf(file = "PCA_plots.pdf", width = 10, height = 10)
+
+# Arrange and plot both a_plot and var_plot in the PDF
+a_plot + var_plot  
+# Close the PDF device
+dev.off()
+```
 
 
 ```{r, fig.width = 8, fig.show= "hold", out.width= "50%"}
@@ -353,9 +366,10 @@ df_ordered <- df_group %>%
 
 data_matrix <- as.matrix(df_ordered[, c("SampleID", "FF_IL12p70", "FF_IL4", "FF_TNFa", "Serum_TNFa", "Serum_IL13", "Serum_IL6", "Serum_IL8")])
 
+#data_matrix <- as.matrix(df_ordered)
 rownames(data_matrix) <- data_matrix[, "SampleID"]
 
-data_matrix <- data_matrix[, -1]
+data_matrix <- data_matrix[, -(1)] # for everything change to 1:2
 
 data_matrix <- t(data_matrix)
 
@@ -373,7 +387,6 @@ color_function <- colorRamp2(c(min(data_matrix_numeric),0, max(data_matrix_numer
 ordered_sample_ids <- df_ordered$SampleID
 ```
 
-
 ```{r, fig.height=2, fig.width=6}
 wo_clust <- Heatmap(data_matrix_numeric,
         name = "Value",
@@ -386,13 +399,13 @@ wo_clust <- Heatmap(data_matrix_numeric,
         column_order = match(ordered_sample_ids, colnames(data_matrix)),
         col = color_function,
         column_names_gp = gpar(fontsize = 6), 
-        row_names_gp = gpar(fontsize = 6), 
-        width = unit(4, "in"),   
-        height = unit(1, "in"))
+        row_names_gp = gpar(fontsize = 6)) 
+        #width = unit(4, "in"),   
+        #height = unit(1, "in"))
 wo_clust
 ```
 
-```{r, fig.height=6, fig.width=6}
+```{r, fig.height=6, fig.width=10}
 
 set.seed(123)
 dist_matrix_cols <- dist(t(data_matrix_numeric), method = "euclidean")
@@ -450,42 +463,97 @@ hc_heatmap <- Heatmap(transposed_data_matrix,
         column_names_gp = gpar(fontsize = 6),
         row_names_gp = gpar(fontsize = 6),
         column_labels = rownames(data_matrix_numeric), 
-        width = unit(1, "in"),  
+        width = unit(3, "in"),  
         height = unit(4, "in"),   
         left_annotation = rowAnnotation(
   Group = group_levels, 
   col = list(Group = color_group_list)
 )) 
+
+hc_heatmap
+
+```
+
+
+
+```{r, echo=FALSE, results='hide', fig.keep='none'}
+pdf(file = "Heatmap_plot.pdf", width = 10, height = 10)
+wo_clust
+dev.off()
+```
+
+```{r, echo=FALSE, results='hide', fig.keep='none'}
 pdf(file = "H_clust_heatmap.pdf", width = 10, height = 10)
 hc_heatmap
 dev.off()
 ```
 
-```{r, echo=FALSE, results='hide', fig.keep='none'}
-pdf(file = "PCA_plots.pdf", width = 10, height = 10)
+For all proteins
+```{r}
+data_matrix <- as.matrix(df_ordered)
 
-# Arrange and plot both a_plot and var_plot in the PDF
-a_plot + var_plot  
-wo_clust
+rownames(data_matrix) <- data_matrix[, "SampleID"]
+
+data_matrix <- data_matrix[, -(1:2)]
+
+data_matrix <- t(data_matrix)
+
+og_rownames <- rownames(data_matrix)
+
+data_matrix_numeric <- as.matrix(data_matrix)  
+data_matrix_numeric <- apply(data_matrix_numeric, 2, as.numeric)
+
+# 3. Set the original row names back
+rownames(data_matrix_numeric) <- og_rownames
+
+color_function <- colorRamp2(c(min(data_matrix_numeric),0, max(data_matrix_numeric)),
+                             c("blue","white","red"))
+
+ordered_sample_ids <- df_ordered$SampleID
+
+dist_matrix_cols <- dist(t(data_matrix_numeric), method = "euclidean")
+
+hc_cols <- hclust(dist_matrix_cols, method = "ward.D2")
+
+color_group_list <- c("Ctrl" = "#595959", "RIF" = "#eb4fb2")
+
+group_levels <- factor(df_ordered$Group, levels = names(color_group_list))
+
+column_anno <- HeatmapAnnotation(
+  Group = group_levels, 
+  col = list(Group = color_group_list)
+)
+
+
+transposed_data_matrix <- t(data_matrix_numeric)
+
+hc_heatmap <- Heatmap(transposed_data_matrix,
+        name = "Value",
+        cluster_rows = TRUE,   
+        cluster_columns = FALSE,  
+        row_split = 4,  
+        show_row_names = TRUE,
+        show_column_names = TRUE,
+        row_title = "Samples",  
+        column_title = "Proteins",  
+        row_order = hc_cols$order,  
+        col = color_function,
+        column_names_gp = gpar(fontsize = 6),
+        row_names_gp = gpar(fontsize = 6),
+        column_labels = rownames(data_matrix_numeric), 
+        width = unit(3, "in"),  
+        height = unit(4, "in"),   
+        left_annotation = rowAnnotation(
+  Group = group_levels, 
+  col = list(Group = color_group_list)
+)) 
 hc_heatmap
-# Close the PDF device
-dev.off()
 ```
 
-```{r, echo=FALSE, results='hide', fig.keep='none'}
-pdf(file = "Heatmap_plot.pdf", width = 10, height = 10)
 
-wo_clust
-
-# Close the PDF device
-dev.off()
-```
-```{r, echo=FALSE, results='hide', fig.keep='none'}
-pdf(file = "Heatmap_hc_plot.pdf", width = 10, height = 10)
-
+```{r}
+pdf(file = "H_clust_heatmap_all_proteins.pdf", width = 10, height = 10)
 hc_heatmap
-
-# Close the PDF device
 dev.off()
 ```
 
@@ -571,37 +639,173 @@ ggplot(df_replicates_only, aes(x = SampleType, y = Value, fill = Group)) +
 ```
 
 Visualise the correlation between serum and FF in Control and RIF
-```{r}
+```{r, fig.width=15, fig.height=15, fig.show='hold', out.width= '50%',echo=FALSE, fig.keep='none'}
+df_avg <- df %>%
+  mutate(SampleID = gsub(" ", "", SampleID)) %>%
+  group_by(SampleID, Group) %>%
+  dplyr::summarise(across(everything(), ~ mean(.x, na.rm = TRUE)))
+
+df_avg <- na.omit(df_avg)
+
 data_long <- df_avg %>%
   group_by(SampleID, Group) %>%
   pivot_longer(cols = starts_with("Serum_"), names_to = "Protein_Serum", values_to = "Serum_value") %>%
   pivot_longer(cols = starts_with("FF_"), names_to = "Protein_FF", values_to = "FF_value") %>%
-  filter(substr(Protein_Serum, 6, 15) == substr(Protein_FF, 3, 15))
+  filter(substr(Protein_Serum, 6, 15) == substr(Protein_FF, 3, 15)) %>%
+  mutate(Protein = ifelse(substr(Protein_Serum, 6, 15) == substr(Protein_FF, 3,   15), substr(Protein_Serum, 7, 15), NA))
+
+data_long <- data_long %>%
+    filter(!is.na(Serum_value) & !is.na(FF_value))
 
 data_ctrl <- data_long %>% filter(Group == "Ctrl")
 data_rif <- data_long %>% filter(Group == "RIF")
 
-cor_ctrl <- data_ctrl %>%
-  dplyr::group_by(Protein_Serum, Protein_FF) %>%
-  dplyr::summarize(correlation = cor(Serum_value, FF_value))
+cor_ctrl <- cor(data_ctrl[,-c(1:3,5,7)])
+cor_rif <- cor(data_rif[,-c(1:3,5,7)])
 
-cor_rif <- data_rif %>%
-  dplyr::group_by(Protein_Serum, Protein_FF) %>%
-  dplyr::summarize(correlation = cor(Serum_value, FF_value))
+ggplot(data_ctrl, aes(x = Serum_value, y = FF_value)) +
+  geom_point(color = "grey") +
+  facet_wrap(~Protein)+
+  geom_smooth(method = "lm", col = "darkgrey") +
+  ggtitle(paste("Control Group: Serum vs FF (r =", round(cor_ctrl, 2), ")")) +
+  theme_minimal() +
+  scale_x_log10()+
+  scale_y_log10()
 
-correlation_data <- bind_rows(
-  cor_ctrl %>% mutate(Group = "Control"),
-  cor_rif %>% mutate(Group = "RIF")
-)
+ggplot(data_rif, aes(x = Serum_value, y = FF_value)) +
+  geom_point(color = 'pink') +
+  facet_wrap(~Protein)+
+  geom_smooth(method = "lm", col = "#eb4fb2") +
+  ggtitle(paste("Experimental Group: Serum vs Plasma (r =", round(cor_rif, 2), ")")) +
+  theme_minimal()+
+  scale_x_log10()+
+  scale_y_log10()
+
+```
+
+
+```{r, fig.width=15, fig.height=15, echo=FALSE, fig.keep='none'}
+p_values_ctrl <- data_ctrl %>%
+  dplyr::group_by(Protein_Serum, Protein_FF) %>%
+  dplyr::summarize(p_value = cor.test(Serum_value, FF_value)$p.value)
+
+p_values_rif <- data_rif %>%
+  dplyr::group_by(Protein_Serum, Protein_FF) %>%
+  dplyr::summarize(p_value = cor.test(Serum_value, FF_value)$p.value)
+
+p_values <- bind_rows(
+  p_values_ctrl %>% mutate(Group = "Control"),
+  p_values_rif %>% mutate(Group = "RIF")
+) %>%
+  mutate(stars = case_when(
+    p_value < 0.001 ~ "***",
+    p_value < 0.01 ~ "**",
+    p_value < 0.05 ~ "*",
+    TRUE ~ ""
+  ))
+
+corr_p <- data_long %>%
+  left_join(p_values, by = c("Protein_Serum", "Protein_FF", "Group"))
+
+
+#ggplot(data_long, aes(x = Serum_value, y = FF_value, color = Group)) +
+#    geom_point() +
+#    geom_smooth(method = "lm", se = FALSE) +
+#    facet_wrap(~ Protein, scales = "fixed") +
+#    ggtitle(paste("Correlation for", data_long$Protein, "- r =", round(corr_value, #2))) +
+#    xlab("Serum Levels") +
+#    ylab("Plasma Levels") +
+#    theme_minimal() +
+#    theme(legend.position = "bottom") 
+
+ggplot(data_long, aes(x = FF_value, y = Serum_value, color = Group)) +
+  geom_point(size = 0.2) +
+  geom_smooth(method = "lm", se = FALSE) +
+  facet_wrap(~ Protein, scales = "fixed") +
+  labs(title = "Correlation between Serum and FF for Control and RIF",
+       x = "FF", y = "Serum") +
+  coord_equal()+
+  scale_x_log10()+
+  scale_y_log10()+
+  theme_minimal() +
+  geom_text(data = corr_p, aes(x = Inf, y = Inf, label = stars),
+            hjust = 1.1, vjust = 1.5, size = 5, inherit.aes = FALSE)
+
+
+```
+
+```{r, fig.height= 20, fig.width=20}
+calculate_correlations <- function(df) {
+  df %>%
+    group_by(Protein, Group) %>%
+    summarize(correlation = cor(FF_value, Serum_value, method = "pearson"), .groups = 'drop')  
+}
+
+correlations_df <- calculate_correlations(data_long)
+
+#ggplot(data_long, aes(x = FF_value, y = Serum_value, color = Group)) +
+#  geom_point() +
+#  geom_smooth(method = "lm", se = FALSE) +  
+ # facet_wrap(~ Protein) +  
+#  labs(title = "Serum vs FF Protein Concentrations for Each Protein",
+#       x = "FF ",
+#       y = "Serum ") +
+#  theme_minimal() +
+#  stat_cor(aes(label = paste(..r.label.., ..p.label.., sep = "~`,`~")), 
+#           method = "pearson", 
+#           label.x = -20, label.y = -25)
+
+min_serum_value <- min(data_long$Serum_value[data_long$Serum_value > 0], na.rm = TRUE)
+min_ff_value <- min(data_long$FF_value[data_long$FF_value > 0], na.rm = TRUE)
+
+x_lim <- c(min_serum_value, max(data_long$Serum_value, na.rm = TRUE))
+y_lim <- c(min_ff_value, max(data_long$FF_value, na.rm = TRUE))
 
 ggplot(data_long, aes(x = Serum_value, y = FF_value, color = Group)) +
-  geom_point(size = 0.9) +
-  geom_smooth(method = "lm", se = FALSE) +
-  facet_wrap(~ Protein_Serum + Protein_FF, scales = "free") +
-  labs(title = "Correlation between Serum and FF for Control and RIF",
-       x = "Serum", y = "FF") +
-  theme_minimal()
+  geom_point() +
+  geom_smooth(method = "lm") +
+  facet_wrap(~Protein, scales = "fixed") +
+  ggtitle("Serum vs FF") +
+  theme_minimal() +
+  scale_x_log10(limits = x_lim) +
+  scale_y_log10(limits = y_lim) +
+  theme(legend.position = "top")
+ # stat_cor(aes(label = paste(..r.label.., ..p.label.., sep = "~`,`~")),            
+#          method = "pearson", 
+#          label.x = 1, label.y = 0.5)
+  
+  
+
 ```
+
+```{r, echo=FALSE, eval=FALSE}
+data_wide <- data_long %>%
+  select(SampleID, Group, Protein, Serum_value, FF_value) %>%
+  pivot_wider(names_from = Protein, values_from = c(Serum_value, FF_value), values_fill = NA)
+
+# Split data by Group
+data_group1 <- data_wide %>% filter(Group == "Ctrl") 
+data_group2 <- data_wide %>% filter(Group == "RIF") 
+correlation_matrix_group1 <- cor(data_group1[, -c(1:2)], use = "pairwise.complete.obs")
+correlation_matrix_group2 <- cor(data_group2[, -c(1:2)], use = "pairwise.complete.obs")
+
+#par(mfrow = c(1, 2))  
+
+corrplot(correlation_matrix_group1, method = "circle", type = "upper", 
+         tl.col = "black", tl.srt = 45,  
+         title = "Control: Correlation of Serum and FF Values", 
+         addCoef.col = "black",        
+         col = colorRampPalette(c("red", "white", "blue"))(200))
+
+corrplot(correlation_matrix_group2, method = "circle", type = "upper", 
+         tl.col = "black", tl.srt = 45,  
+         title = "RIF: Correlation of Serum and FF Values", 
+         addCoef.col = "black",        
+         col = colorRampPalette(c("red", "white", "blue"))(200))
+
+par(mfrow = c(1, 1))
+```
+
 
 Calculate basic summary statistics like, mean, standard devioation and co-efficient of variation for the replicates and visualise
 
@@ -623,10 +827,7 @@ ggplot(summary_stats, aes(x = Protein, y = CV, fill = SampleType)) +
   theme(axis.text.x = element_text(angle = 90, hjust = 1, size = 5))
 ```
 
-Divide the data into two groups to visualise the variance more clearly with a density plot.
-
-1. RIF with replicates:
-
+Density plots
 ```{r RIF}
 
 df_avg <- df %>%
@@ -659,52 +860,8 @@ rif_m <- df_RIF %>%
 #    Count = n()
 #  )
 #rif_m <- ddply(summary_stats_RIF, "SampleType", summarise, grp.median=median(log(Mean)))
-```
-
-2. RIF (everything):
-
-- Note: No difference from the previous, since most replicates do have a measure/ value.
-```{r RIF (everything), echo = FALSE, results='hide'}
-
-# Since the values are averaged out this section is not needed
-df_RIF_e <- df_long_avg %>%
-  filter(Group == "RIF")
-
-summary_stats_RIF_e <- df_RIF_e %>%
-  group_by(SampleID, Protein, SampleType) %>%
-  dplyr::summarize(
-    Mean = mean(Value, na.rm = TRUE),
-    SD = sd(Value, na.rm = TRUE),
-    CV = ifelse(Mean == 0, NA, (SD / Mean) * 100),
-    Count = n()
-  )
-rif_e_m <- ddply(summary_stats_RIF_e, "SampleType", summarise, grp.median=median(log(Mean)))
-```
 
 
-```{r, echo=FALSE, results= "hide", fig.keep='none'}
-#ggplot(df_RIF, aes(x = Value, fill = SampleType)) +
-#  geom_density(alpha = 0.6) +
-#  facet_wrap(~ Protein, scales = "fixed") +
-#  labs(x = "Value", y = "Density", title = "Density Plot of protein #concentration in RIF") +
-#  theme_minimal() +
-#  theme(legend.position = "top") +
-#  geom_vline(data=rif_m, aes(xintercept=grp.median),
-#             linetype="dashed")
-
-#ggplot(summary_stats_RIF_e, aes(x = log(Mean), fill = SampleType)) +
-#  geom_density(alpha = 0.6) +
-#  facet_wrap(~ Protein, scales = "fixed") +
-#  labs(x = "log transformed Mean", y = "Density", title = "Density Plot of #protein concentration in RIF(including non replicates)") +
-#  theme_minimal() +
-#  theme(legend.position = "top") +
-#  geom_vline(data=rif_e_m, aes(xintercept=grp.median, color=SampleType),
-#             linetype="dashed")
-```
-
-3. Control with replicates :
-
-```{r Control}
 df_Ctrl <- df_long_avg %>%
   filter(Group == "Ctrl")
 
@@ -724,11 +881,45 @@ ctrl_m <- df_Ctrl %>%
 
 ```
 
-- Note: The control groups with replicates have only one measurement of proteins in FF and replicates have no values.
+```{r RIF (everything), echo = FALSE, results='hide', eval=FALSE}
 
-4. Control (everything) :
-Plotting mean values, since most samples dont have replicate values for FF.
-```{r Control (everything), echo = FALSE, results='hide'}
+# Since the values are averaged out this section is not needed
+df_RIF_e <- df_long_avg %>%
+  filter(Group == "RIF")
+
+summary_stats_RIF_e <- df_RIF_e %>%
+  group_by(SampleID, Protein, SampleType) %>%
+  dplyr::summarize(
+    Mean = mean(Value, na.rm = TRUE),
+    SD = sd(Value, na.rm = TRUE),
+    CV = ifelse(Mean == 0, NA, (SD / Mean) * 100),
+    Count = n()
+  )
+rif_e_m <- ddply(summary_stats_RIF_e, "SampleType", summarise, grp.median=median(log(Mean)))
+```
+
+
+```{r, echo=FALSE, results= "hide", fig.keep='none', eval=FALSE}
+#ggplot(df_RIF, aes(x = Value, fill = SampleType)) +
+#  geom_density(alpha = 0.6) +
+#  facet_wrap(~ Protein, scales = "fixed") +
+#  labs(x = "Value", y = "Density", title = "Density Plot of protein #concentration in RIF") +
+#  theme_minimal() +
+#  theme(legend.position = "top") +
+#  geom_vline(data=rif_m, aes(xintercept=grp.median),
+#             linetype="dashed")
+
+#ggplot(summary_stats_RIF_e, aes(x = log(Mean), fill = SampleType)) +
+#  geom_density(alpha = 0.6) +
+#  facet_wrap(~ Protein, scales = "fixed") +
+#  labs(x = "log transformed Mean", y = "Density", title = "Density Plot of #protein concentration in RIF(including non replicates)") +
+#  theme_minimal() +
+#  theme(legend.position = "top") +
+#  geom_vline(data=rif_e_m, aes(xintercept=grp.median, color=SampleType),
+#             linetype="dashed")
+```
+
+```{r Control (everything), echo = FALSE, results='hide', eval=FALSE}
 
 # Not required since the values are averaged
 df_Ctrl_e <- df_long %>%
@@ -745,46 +936,92 @@ summary_stats_Ctrl_e <- df_Ctrl_e %>%
 ctrl_e_m <- ddply(summary_stats_Ctrl_e, "SampleType", summarise, grp.median=median(log(Mean)))
 
 ```
+Density Plots
 
+```{r, fig.width=20, fig.show='hold', out.height='50%'}
+df_first_5 <- df_long_avg %>%
+  filter(Protein == c("IFNg", "IL10", "IL12p70", "IL13", "IL1b"))
 
-```{r, fig.height = 10, fig.width = 10, fig.show= "hold", out.width= "50%"}
-gg_ctrl_density <- ggplot(df_Ctrl, aes(x = Value , fill = SampleType))+
+df_first_5_median <- df_first_5 %>%
+  dplyr::group_by(Protein, SampleType, Group) %>%
+  dplyr::summarise(grp.median = median(Value, na.rm = TRUE)) %>%
+  dplyr::ungroup()
+
+df_last_5 <- df_long_avg %>%
+  filter(Protein == c("IL2", "IL4", "IL6", "IL8", "TNFa"))
+
+df_last_5_median <- df_last_5 %>%
+  dplyr::group_by(Protein, SampleType, Group) %>%
+  dplyr::summarise(grp.median = median(Value), na.rm = TRUE) %>%
+  dplyr::ungroup()
+
+gg_1_density <- ggplot(df_first_5, aes(x = Value , fill = SampleType)) +
   geom_density(alpha = 0.6) +
-  facet_wrap(~ Protein, scales = "fixed") +
-  labs(x = "log Value", y = "Density", title = "Density Plot of protein concentrations in Control") +
-  theme_minimal() +
+  facet_nested(~ Protein + Group, scales = "fixed") +  
+  labs(x = "log Value", y = "Density", title = "Density Plot of Protein Concentrations") +
+  theme_classic() +
   theme(legend.position = "top") +
-  geom_vline(data=ctrl_m, aes(xintercept=grp.median, color = SampleType),
-             linetype="dashed") +
+  geom_vline(data = df_first_5_median, aes(xintercept = grp.median, color = SampleType), linetype = "dashed") +
   scale_x_log10()
 
 
-gg_ctrl_density
+gg_1_density
 
-gg_rif_density <- ggplot(df_RIF, aes(x = Value  , fill = SampleType)) +
+gg_2_density <- ggplot(df_last_5, aes(x = Value  , fill = SampleType)) +
   geom_density(alpha = 0.6) +
-  facet_wrap(~ Protein, scales = "fixed") +
-  labs(x = "log Value", y = "Density", title = "Density Plot of protein concentration in RIF") +
-  theme_minimal() +
-  theme(legend.position = "top") +
-  geom_vline(data=rif_m, aes(xintercept=grp.median, color = SampleType),
+  facet_nested(~ Protein +Group, scales = "fixed") +
+  labs(x = "log Value", y = "Density") +
+  theme_classic() +
+  #theme(legend.position = "top") +
+  geom_vline(data=df_last_5_median, aes(xintercept=grp.median, color = SampleType),
              linetype="dashed") +
   scale_x_log10()
 
-g1_built <- ggplot_build(gg_ctrl_density)
-g2_built <- ggplot_build(gg_rif_density)
+#g1_built <- ggplot_build(gg_1_density)
+#g2_built <- ggplot_build(gg_2_density)
 
 # Extract the scales from gg_ctrl_density
-xrange <- g1_built$layout$panel_scales_x[[1]]$range$range
-yrange <- g1_built$layout$panel_scales_y[[1]]$range$range
+#xrange <- g1_built$layout$panel_scales_x[[1]]$range$range
+#yrange <- g1_built$layout$panel_scales_y[[1]]$range$range
 
 # Plot the second graph
-gg_rif_density +
-  scale_x_continuous(limits = xrange) +
-  scale_y_continuous(limits = yrange)
+gg_2_density 
+#  scale_x_continuous(limits = xrange) +
+#  scale_y_continuous(limits = yrange)
 ```
 
-```{r, results='hide', fig.keep='none'}
+Ridge plots
+```{r, fig.height = 10, fig.width = 10, fig.show= "hold", out.width= "50%"}
+
+# Ridge plot for Control dataset
+gg_ctrl_ridge <- ggplot(df_Ctrl, aes(x = Value, y = Protein, fill = SampleType)) +
+  geom_density_ridges(alpha = 0.8, scale = 0.9) +
+  scale_fill_manual(values = c("Serum" = "red", "FF" = "blue")) +  
+  theme_ridges()+
+  labs(title = "Ridge Plot of Proteins in Serum vs. FF in Control",
+       x = "Value",
+       y = "Protein",
+       fill = "Sample Type")+ 
+  theme(axis.text.y = element_text(size = 8), legend.position = "none")  
+  
+gg_ctrl_ridge
+
+# Ridge plot for RIF dataset
+gg_rif_ridge <-ggplot(df_RIF, aes(x = Value, y = Protein, fill = SampleType)) +
+  geom_density_ridges(alpha = 0.8, scale = 0.9) +
+  scale_fill_manual(values = c("Serum" = "red", "FF" = "blue")) + 
+  theme_ridges() +
+  labs(title = "Ridge Plot of Proteins in Serum vs. FF in RIF",
+       x = "Value",
+       y = "Protein",
+       fill = "Sample Type") +
+  theme(axis.text.y = element_text(size = 8),  
+        legend.position = "right")  
+
+gg_rif_ridge
+```
+
+```{r, echo=FALSE, results='hide', fig.keep='none'}
 
 # Prepare data for combined plot
 df_combined <- rbind(
@@ -908,20 +1145,163 @@ gg_rif <- ggplot(th1_th2_ratio_rif, aes(x = Group, y = Th1_Th2_Ratio, fill = Sam
        y = "Th1/Th2 Ratio") +
   theme_minimal()
 
+gg_ctrl 
 
-
-gg_ctrl # Plot the first graph
-
-# Build plots to exract scales
 g1_built <- ggplot_build(gg_ctrl)
 g2_built <- ggplot_build(gg_rif)
 
-# Extract the scales from gg_ctrl
 yrange <- g1_built$layout$panel_scales_y[[1]]$range$range
 
-# Plot the second graph
 gg_rif +
   scale_y_continuous(limits = yrange)
+```
+
+
+
+New analysis with meta data
+
+
+```{r}
+meta_df <- read_excel("/Users/pooja/Documents/Thesis/cytokine_data/Data/meta_data.xlsx")
+
+meta_df <- meta_df %>%
+  dplyr::select(SampleID, Ålder, BMI, FSH_TOTALDOS, `FSH cd 3`, `LH cd 3`, Menscykellängd, Graviditet, Födsel)
+names(meta_df)[names(meta_df) == "FSH cd 3"] <- "FSH_cd3"
+names(meta_df)[names(meta_df) == "LH cd 3"] <- "LH_cd3"
+names(meta_df)[names(meta_df) == "Menscykellängd"] <- "Menstrual_cycle_day"
+names(meta_df)[names(meta_df) == "Graviditet"] <- "Pregnancy"
+names(meta_df)[names(meta_df) == "Födsel"] <- "Birth"
+names(meta_df)[names(meta_df) == "Ålder"] <- "Age"
+
+```
+
+```{r}
+meta_df <- meta_df %>%
+  mutate(
+    Age = as.numeric(Age),
+    BMI = as.numeric(BMI),
+    FSH_TOTALDOS = as.numeric(FSH_TOTALDOS),
+    FSH_cd3 = as.numeric(FSH_cd3),
+    LH_cd3 = as.numeric(LH_cd3),
+    Pregnancy = as.numeric(Pregnancy),
+    Birth = as.numeric(Birth),
+    Menstrual_cycle_day = as.numeric(Menstrual_cycle_day)
+  )
+table1(~ Age +BMI +FSH_TOTALDOS+ FSH_cd3 + LH_cd3 + Menstrual_cycle_day + Pregnancy + Birth, data = meta_df)
+```
+
+
+Merge the data frames
+
+```{r}
+merged_df <- merge(df_avg, meta_df, by = "SampleID")
+```
+
+Basic statistical analysis
+```{r}
+
+summary_stats <- meta_df %>%
+  summarise(
+    mean_age = mean(Age, na.rm = TRUE),
+    median_age = median(Age, na.rm = TRUE),
+    sd_age = sd(Age, na.rm = TRUE),
+    mean_BMI = mean(BMI, na.rm = TRUE),
+    median_BMI = median(BMI, na.rm = TRUE),
+    sd_BMI = sd(BMI, na.rm = TRUE),
+    mean_FSH = mean(FSH_cd3, na.rm = TRUE),
+    mean_LH = mean(as.numeric(LH_cd3), na.rm = TRUE)
+  )
+summary_stats
+numeric_df <- meta_df %>% select(where(is.numeric))
+
+```
+
+```{r}
+df_long_meta <- meta_df %>%
+  dplyr::group_by(SampleID) %>%
+  pivot_longer(cols = c(Age, BMI, FSH_TOTALDOS, FSH_cd3, LH_cd3, Pregnancy, Birth, Menstrual_cycle_day)) %>%
+  dplyr::ungroup() %>%
+  drop_na()
+
+```
+
+Visualise
+```{r}
+
+# Histogram of Age
+ggplot(df_long_meta %>% filter(name == 'Age'), aes(x = value)) +
+  geom_histogram(bins = 30, fill = "blue", alpha = 0.7) +
+  labs(title = "Age Distribution", x = "Age", y = "Count")
+
+df_wide <- df_long_meta %>%
+  filter(name %in% c('FSH_TOTALDOS', 'Pregnancy', 'BMI')) %>%
+  pivot_wider(names_from = name, values_from = value) %>%
+  filter(!is.na(Pregnancy), Pregnancy != 5)
+
+ggplot(df_wide, aes(x = as.factor(Pregnancy), y = FSH_TOTALDOS)) +
+  geom_boxplot() +
+  labs(title = "FSH Levels by Pregnancy Status", x = "Pregnancy", y = "FSH Levels")
+
+ggplot(df_wide, aes(x = BMI, y = FSH_TOTALDOS)) +
+  geom_point() +
+  geom_smooth(method = "lm") +
+  labs(title = "FSH vs BMI", x = "BMI", y = "FSH")
+```
+
+```{r}
+# T-test for FSH levels between pregnant and non-pregnant
+
+meta_df <- meta_df %>%
+  filter(Pregnancy == "1" | Pregnancy == "0")
+
+t_test_result <- t.test(FSH_cd3 ~ factor(Pregnancy), data = meta_df)
+t_test_result
+
+# ANOVA for LH levels
+anova_result <- aov(FSH_cd3 ~ factor(Pregnancy), data = meta_df)
+anova_result 
+
+# Mann-Whitney U Test
+wilcox_test_result <- wilcox.test(FSH_cd3 ~ factor(Pregnancy), data = meta_df)
+wilcox_test_result
+```
+
+Correlation analysis
+```{r, eval=FALSE}
+df_long_m <- merged_df %>%
+  dplyr::group_by(SampleID) %>%
+  pivot_longer(cols = c(Age, BMI, FSH_TOTALDOS, FSH_cd3, LH_cd3, Pregnancy, Birth, Menstrual_cycle_day), 
+               names_to = "Variable", 
+               values_to = "Value") %>%
+  pivot_longer(cols = starts_with("Serum_") | starts_with("FF_"),
+               names_to = c("SampleType", "Protein"),
+               names_sep = "_",
+               values_to = "Measure") %>%
+  dplyr::ungroup() %>%
+  drop_na()
+
+fsh_data <- df_long_m %>%
+  filter(grepl("FSH_cd3", Variable)) %>%
+  select(SampleID, Variable, Value)
+
+serum_measure_data <- df_long_m %>%
+  filter(SampleType == "Serum") 
+
+combined_data <- fsh_data %>%
+  left_join(measure_data, by = "SampleID")
+
+correlation_results <- combined_data %>%
+  group_by(SampleType, Protein) %>%
+  summarize(Correlation = cor(Value, Measure, use = "complete.obs")) 
+
+calculate_correlations <- function(df) {
+  df %>%
+    group_by(Protein, Group) %>%
+    summarize(correlation = cor(Measure, Value, method = "pearson"), .groups = 'drop') 
+}
+
+correlations_df <- calculate_correlations(serum_measure_data)
+
 ```
 
 
