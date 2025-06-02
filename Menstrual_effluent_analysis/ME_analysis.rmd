@@ -1,0 +1,1047 @@
+  ---
+title: "ME analysis (Shih)"
+date: "2025"
+output:
+  html_document: default
+
+---
+
+```{r, include = FALSE}
+knitr::opts_chunk$set(echo = TRUE,
+                      eval = TRUE,
+                      message = FALSE,
+                      warning = FALSE)
+options(max.print=200)
+
+```
+This script takes the menstrual blood scRNAseq data from Shih et al. 2023 and performs the following:
+- Reads the 10X h5 files and creates Seurat objects
+- Filters the data to only include control samples
+- Filters the data based on quality control metrics
+- Normalises the data using SCTransform
+- Runs PCA and Harmony for batch correction
+- Finds neighbors and clusters the data
+- Annotates the clusters based on known markers
+- Annotates the cell types for sex hormone receptors
+- Runs differential expression analysis and GSEA analysis
+
+
+LOAD LIBRARIES
+```{r}
+suppressPackageStartupMessages({
+  library(dplyr)
+library(Seurat)
+library(hdf5r)
+library(ggplot2)
+library(harmony)
+library(glmnet)
+library(patchwork)
+library(tidyr)
+library(presto)
+ library(scCustomize)
+  library(reshape2)
+  library(knitr)
+library(dittoSeq)
+  library(clusterProfiler)
+library(org.Hs.eg.db)
+library(msigdbr)
+library(enrichplot)
+library(UpSetR)
+})
+
+```
+INPUT
+```{r, eval = FALSE}
+whole_me_tissue <- Read10X_h5("/home/inf-21-2023/thesis/ME_scRNA/menstrual_blood/GSE203191_RAW/GSM6161373_wholeME_MEtissue_filtered_feature_bc_matrix.h5")
+tissue_1 <- Read10X_h5("/home/inf-21-2023/thesis/ME_scRNA/menstrual_blood/GSE203191_RAW/GSM6161374_MEtissue1_filtered_feature_bc_matrix.h5")
+tissue_2 <- Read10X_h5("/home/inf-21-2023/thesis/ME_scRNA/menstrual_blood/GSE203191_RAW/GSM6161375_MEtissue2_filtered_feature_bc_matrix.h5")
+tissue_3 <- Read10X_h5("/home/inf-21-2023/thesis/ME_scRNA/menstrual_blood/GSE203191_RAW/GSM6161376_MEtissue3_filtered_feature_bc_matrix.h5")
+tissue_4 <- Read10X_h5("/home/inf-21-2023/thesis/ME_scRNA/menstrual_blood/GSE203191_RAW/GSM6161377_MEtissue4_filtered_feature_bc_matrix.h5")
+tissue_5 <- Read10X_h5("/home/inf-21-2023/thesis/ME_scRNA/menstrual_blood/GSE203191_RAW/GSM6161378_MEtissue5_filtered_feature_bc_matrix.h5")
+tissue_6 <- Read10X_h5("/home/inf-21-2023/thesis/ME_scRNA/menstrual_blood/GSE203191_RAW/GSM6161379_MEtissue6_filtered_feature_bc_matrix.h5")
+tissue_7 <- Read10X_h5("/home/inf-21-2023/thesis/ME_scRNA/menstrual_blood/GSE203191_RAW/GSM6161380_MEtissue7_filtered_feature_bc_matrix.h5")
+whole_me_1 <- Read10X_h5("/home/inf-21-2023/thesis/ME_scRNA/menstrual_blood/GSE203191_RAW/GSM6161383_wholeME1_filtered_feature_bc_matrix.h5")
+whole_me_2 <- Read10X_h5("/home/inf-21-2023/thesis/ME_scRNA/menstrual_blood/GSE203191_RAW/GSM6161381_wholeME2_filtered_feature_bc_matrix.h5")
+whole_me_3 <- Read10X_h5("/home/inf-21-2023/thesis/ME_scRNA/menstrual_blood/GSE203191_RAW/GSM6161382_wholeME3_filtered_feature_bc_matrix.h5")
+```
+Create seurat objects
+```{r, eval = FALSE}
+whole_me_tissue_so <- CreateSeuratObject(counts = whole_me_tissue, project = "whole_me")
+tissue_1_so <- CreateSeuratObject(counts = tissue_1, project = "tissue_1")
+tissue_2_so <- CreateSeuratObject(counts = tissue_2, project = "tissue_2")
+tissue_3_so <- CreateSeuratObject(counts = tissue_3, project = "tissue_3")
+tissue_4_so <- CreateSeuratObject(counts = tissue_4, project = "tissue_4")
+tissue_5_so <- CreateSeuratObject(counts = tissue_5, project = "tissue_5")
+tissue_6_so <- CreateSeuratObject(counts = tissue_6, project = "tissue_6")
+tissue_7_so <- CreateSeuratObject(counts = tissue_7, project = "tissue_7")
+whole_me_1_so <- CreateSeuratObject(counts = whole_me_1, project = "whole_me_1")
+whole_me_2_so <- CreateSeuratObject(counts = whole_me_2, project = "whole_me_2")
+whole_me_3_so <- CreateSeuratObject(counts = whole_me_3, project = "whole_me_3")
+```
+```{r}
+meta_data <- read.table("/home/inf-21-2023/thesis/ME_scRNA/menstrual_blood/GSE203191_Shih_endo_meta_frame.tsv", header = TRUE, sep = "\t", stringsAsFactors = FALSE)
+
+whole_me_tissue_so$barcode <- meta_data$barcode[match(colnames(whole_me_tissue_so), meta_data$barcode)] #%>% na.omit()
+whole_me_tissue_so$phenotype <- meta_data$pheno[match(colnames(whole_me_tissue_so), meta_data$barcode)]
+whole_me_tissue_so$cluster_id <- meta_data$clusterID[match(colnames(whole_me_tissue_so), meta_data$barcode)]
+whole_me_tissue_so$subject_id <- meta_data$subjectID[match(colnames(whole_me_tissue_so), meta_data$barcode)]
+
+
+tissue_1_so$barcode <- meta_data$barcode[match(colnames(tissue_1_so), meta_data$barcode)] # %>% na.omit()
+tissue_1_so$phenotype <- meta_data$pheno[match(colnames(tissue_1_so), meta_data$barcode)]
+tissue_1_so$cluster_id <- meta_data$clusterID[match(colnames(tissue_1_so), meta_data$barcode)]
+tissue_1_so$subject_id <- meta_data$subjectID[match(colnames(tissue_1_so), meta_data$barcode)]
+
+tissue_2_so$barcode <- meta_data$barcode[match(colnames(tissue_2_so), meta_data$barcode)]  #%>% na.omit()
+tissue_2_so$phenotype <- meta_data$pheno[match(colnames(tissue_2_so), meta_data$barcode)]
+tissue_2_so$cluster_id <- meta_data$clusterID[match(colnames(tissue_2_so), meta_data$barcode)]
+tissue_2_so$subject_id <- meta_data$subjectID[match(colnames(tissue_2_so), meta_data$barcode)]
+
+tissue_3_so$barcode <- meta_data$barcode[match(colnames(tissue_3_so), meta_data$barcode)]  #%>% na.omit()
+tissue_3_so$phenotype <- meta_data$pheno[match(colnames(tissue_3_so), meta_data$barcode)]
+tissue_3_so$cluster_id <- meta_data$clusterID[match(colnames(tissue_3_so), meta_data$barcode)]
+tissue_3_so$subject_id <- meta_data$subjectID[match(colnames(tissue_3_so), meta_data$barcode)]
+
+tissue_4_so$barcode <- meta_data$barcode[match(colnames(tissue_4_so), meta_data$barcode)]  #%>% na.omit()
+tissue_4_so$phenotype <- meta_data$pheno[match(colnames(tissue_4_so), meta_data$barcode)]
+tissue_4_so$cluster_id <- meta_data$clusterID[match(colnames(tissue_4_so), meta_data$barcode)]
+tissue_4_so$subject_id <- meta_data$subjectID[match(colnames(tissue_4_so), meta_data$barcode)]
+
+
+tissue_5_so$barcode <- meta_data$barcode[match(colnames(tissue_5_so), meta_data$barcode)]  #%>% na.omit()
+tissue_5_so$phenotype <- meta_data$pheno[match(colnames(tissue_5_so), meta_data$barcode)]
+tissue_5_so$cluster_id <- meta_data$clusterID[match(colnames(tissue_5_so), meta_data$barcode)]
+tissue_5_so$subject_id <- meta_data$subjectID[match(colnames(tissue_5_so), meta_data$barcode)]
+
+
+tissue_6_so$barcode <- meta_data$barcode[match(colnames(tissue_6_so), meta_data$barcode)]  #%>% na.omit()
+tissue_6_so$phenotype <- meta_data$pheno[match(colnames(tissue_6_so), meta_data$barcode)]
+tissue_6_so$cluster_id <- meta_data$clusterID[match(colnames(tissue_6_so), meta_data$barcode)]
+tissue_6_so$subject_id <- meta_data$subjectID[match(colnames(tissue_6_so), meta_data$barcode)]
+
+
+tissue_7_so$barcode <- meta_data$barcode[match(colnames(tissue_7_so), meta_data$barcode)]  #%>% na.omit()
+tissue_7_so$phenotype <- meta_data$pheno[match(colnames(tissue_7_so), meta_data$barcode)]
+tissue_7_so$cluster_id <- meta_data$clusterID[match(colnames(tissue_7_so), meta_data$barcode)]
+tissue_7_so$subject_id <- meta_data$subjectID[match(colnames(tissue_7_so), meta_data$barcode)]
+
+
+whole_me_1_so$barcode <- meta_data$barcode[match(colnames(whole_me_1_so), meta_data$barcode)]  #%>% na.omit()
+whole_me_1_so$phenotype <- meta_data$pheno[match(colnames(whole_me_1_so), meta_data$barcode)]
+whole_me_1_so$cluster_id <- meta_data$clusterID[match(colnames(whole_me_1_so), meta_data$barcode)]
+whole_me_1_so$subject_id <- meta_data$subjectID[match(colnames(whole_me_1_so), meta_data$barcode)]
+
+whole_me_2_so$barcode <- meta_data$barcode[match(colnames(whole_me_2_so), meta_data$barcode)]  #%>% na.omit()
+whole_me_2_so$phenotype <- meta_data$pheno[match(colnames(whole_me_2_so), meta_data$barcode)]
+whole_me_2_so$cluster_id <- meta_data$clusterID[match(colnames(whole_me_2_so), meta_data$barcode)]
+whole_me_2_so$subject_id <- meta_data$subjectID[match(colnames(whole_me_2_so), meta_data$barcode)]
+
+
+whole_me_3_so$barcode <- meta_data$barcode[match(colnames(whole_me_3_so), meta_data$barcode)]  #%>% na.omit()
+whole_me_3_so$phenotype <- meta_data$pheno[match(colnames(whole_me_3_so), meta_data$barcode)]
+whole_me_3_so$cluster_id <- meta_data$clusterID[match(colnames(whole_me_3_so), meta_data$barcode)]
+whole_me_3_so$subject_id <- meta_data$subjectID[match(colnames(whole_me_3_so), meta_data$barcode)]
+
+```
+```{r}
+whole_me_tissue_so <- subset(whole_me_tissue_so, subset = phenotype == "Control")
+tissue_1_so <- subset(tissue_1_so, subset = phenotype == "Control")
+tissue_2_so <- subset(tissue_2_so, subset = phenotype == "Control")
+tissue_3_so <- subset(tissue_3_so, subset = phenotype == "Control")
+tissue_4_so <- subset(tissue_4_so, subset = phenotype == "Control")
+tissue_5_so <- subset(tissue_5_so, subset = phenotype == "Control")
+tissue_6_so <- subset(tissue_6_so, subset = phenotype == "Control")
+tissue_7_so <- subset(tissue_7_so, subset = phenotype == "Control")
+whole_me_1_so <- subset(whole_me_1_so, subset = phenotype == "Control")
+whole_me_2_so <- subset(whole_me_2_so, subset = phenotype == "Control")
+whole_me_3_so <- subset(whole_me_3_so, subset = phenotype == "Control")
+```
+
+Merge the seurat objects
+
+```{r}
+combined <- merge(
+  x = whole_me_tissue_so,
+  y = list(
+    tissue_1_so, tissue_2_so, tissue_3_so, tissue_4_so, tissue_5_so,
+    tissue_6_so, tissue_7_so, whole_me_1_so, whole_me_2_so, whole_me_3_so
+  ),
+  add.cell.ids = c(
+    "whole_me_tissue","tissue_1" ,"tissue_2", "tissue_3", "tissue_4", "tissue_5",
+    "tissue_6", "tissue_7", "whole_me_1", "whole_me_2", "whole_me_3"
+  )
+)
+
+# Join all the layers
+combined_so <- JoinLayers(combined)
+
+```
+
+
+
+```{r, eval = FALSE}
+
+combined_so[["percent.mt"]] <- PercentageFeatureSet(combined_so, pattern = "^MT-")
+
+before_v_plot <- VlnPlot(combined_so, features = c("nFeature_RNA", "nCount_RNA", "percent.mt"), ncol = 3, pt.size = 0)
+
+plot.1 <- before_v_plot + plot_annotation(title = "Before filtering")
+
+# Filtering
+me.data <- subset(combined_so, subset = nCount_RNA > 500 & nCount_RNA < 50000 & nFeature_RNA < 6000 & percent.mt < 10)
+
+after_v_plot <- VlnPlot(me.data, features = c("nFeature_RNA", "nCount_RNA", "percent.mt"), ncol = 3, pt.size = 0)
+
+plot.2 <- after_v_plot + plot_annotation(title = "After filtering")
+
+# Each sample has to have at least 500 cells
+#samples_to_keep <- WhichCells(me.data, idents = Idents(me.data), downsample = 500)
+#subset.me <- subset(me.data, cells = samples_to_keep)
+```
+
+```{r}
+# Normalise the data
+options(future.globals.maxSize = 1000 * 1024^3)
+
+me.data <- SCTransform(combined_so, vars.to.regress = "percent.mt", verbose = TRUE)
+#saveRDS(me.data, file = "/home/inf-21-2023/thesis/ME_scRNA/menstrual_blood/me_normalised.rds")
+
+me.data <- RunPCA(me.data, verbose = TRUE)
+
+# Run harmony to correct for batch effects
+me.data <- RunHarmony(me.data, group.by.vars = "orig.ident")
+
+# Find neighbors and clusters
+me.data <- FindNeighbors(me.data, dims = 1:10)
+me.data <- FindClusters(me.data, resolution = 0.5)
+
+# PLot UMAP
+me.data <- RunUMAP(me.data, dims = 1:10)
+
+head(me.data@meta.data)
+
+umap <- DimPlot(me.data, reduction = "umap", group.by= "seurat_clusters", label = TRUE)
+#ggsave(filename = "/home/inf-21-2023/thesis/ME_scRNA/menstrual_blood/umap.png", plot = umap)
+#saveRDS(me.data, file = "/home/inf-21-2023/thesis/ME_scRNA/menstrual_blood/me_unsub.rds")
+```
+```{r}
+
+me.markers <- FindAllMarkers(me.data, only.pos = TRUE, assay = "SCT")
+
+me.markers %>%
+    group_by(cluster) %>%
+    dplyr::filter(avg_log2FC > 1) %>%
+    slice_head(n = 5) %>%
+    ungroup() -> top5
+```
+```{r}
+s_umap <- DimPlot(me.data, reduction = "umap", label = TRUE) +
+  facet_wrap(~"seurat_clusters") + NoLegend()
+
+# Plot markers
+Seurat::DotPlot(me.data, features = unique(top5$gene)) +
+  ggplot2::theme(axis.text.x = ggplot2::element_text(angle = 90, vjust = 1,
+                                            size = 8, hjust = 1)) +
+  Seurat::NoLegend()
+```
+```{r}
+
+# Markers for B cells - cluster 10
+b.cells <- VlnPlot(
+  me.data,
+ features = c("MZB1", "CD79A", "CD79B", "IGHG1", "SDC1"),
+  group.by = "seurat_clusters",
+  pt.size = 0
+)
+
+# Endothelial cells - 5 or 8
+endothelial.cells <- VlnPlot(
+  me.data,
+  features = c("CDH5", "PECAM1", "KDR", "TEK", "ENG"),
+  group.by = "seurat_clusters",
+  pt.size = 0
+)
+
+# Epithelial cells - 14, ACLAM - 5, 13, 14
+epithelial.cells <- VlnPlot(
+  me.data,
+  features = c("KRT8", "EPCAM", "KRT18", "MUC1", "CDH1", "ALCAM", "CD166"),
+  group.by = "seurat_clusters",
+  pt.size = 0
+)
+
+# Myeloid cells - 3, 5, 13
+myeloid.cells <- VlnPlot(
+  me.data,
+  features = c("LYZ", "ITGAM", "CD33", "CSF1R", "CD14", "GPNMB ", "APOC1" , "TGFBI", "CD80", "CD86",
+               "CD206", "CD64", "CD163"),
+  group.by = "seurat_clusters",
+  pt.size = 0
+)
+
+# Stromal cells - 6 or 8
+stromal.cells <- VlnPlot(
+  me.data,
+  features = c("COL1A1", "VIM", "FN1", "PDGFRB", "ACTA2"),
+  group.by = "seurat_clusters",
+  pt.size = 0
+)
+
+# Markers for CD4 T naive cells - 12, 13
+cd4.naiveT <- VlnPlot(
+  me.data,
+ features = c("TCF7", "CD4","CD3D", "CCR7", "IL7R", "FHIT", "LEF1", "MAL", "NOSIP", "LDHB", "PIK3IP1", "CD27", "SELL", "FOXP3"),
+  group.by = "seurat_clusters",
+  pt.size = 0
+)
+
+
+# Markers for CD4 effector memory T cells
+cd4.emem <- VlnPlot(
+  me.data,
+  features = c("IL7R", "CCL5", "FYB1", "GZMK", "IL32", "GZMA", "KLRB1", "TRAC", "LTB", "AQP3", "CCR7", "CD45RA"),
+  group.by = "seurat_clusters",
+  pt.size = 0
+)
+
+# Markers for central memory CD4T - 1, 12
+cd4.cmem <- VlnPlot(
+  me.data,
+  features = c("IL7R", "TMSB10", "CD4", "ITGB1", "LTB", "TRAC", "AQP3", "LDHB", "IL32", "MAL", "TCF7"),
+  group.by = "seurat_clusters",
+  pt.size = 0
+)
+
+# Markers for naive CD8 T cells - 1, 11 (CD8A)
+cd8.naive <- VlnPlot(
+  me.data,
+  features = c("CD8B", "S100B", "CCR7", "RGS10", "NOSIP", "LINC02446", "LEF1", "CRTAM", "CD8A", "OXNAD1"),
+  group.by = "seurat_clusters",
+  pt.size = 0
+)
+
+# Markers for CD8 effector memory T cells
+cd8.emem <- VlnPlot(
+  me.data,
+  features = c("CCL5", "GZMH", "CD8A", "TRAC", "KLRD1", "CST7", "CD8B", "TRGC2"),
+  group.by = "seurat_clusters",
+  pt.size = 0
+)
+
+# Markers for NK dim cells - 0, 7, 9
+nk.dim <- VlnPlot(
+  me.data,
+  features = c("GNLY", "TYROBP", "NKG7", "FCER1G", "GZMB", "TRDC", "PRF1", "FGFBP2", "SPON2", "KLRF1", "NCAM1"),
+  group.by = "seurat_clusters",
+  pt.size = 0
+)
+
+# Markers for uNK - 0, 4, 11
+unk <- VlnPlot(
+  me.data,
+    features = c("CD45", "PTPRC", "CD56", "NCAM1", "KIR", "CD39", "NKG2A", "NKG2C"),
+  group.by = "seurat_clusters",
+  pt.size = 0
+)
+
+gdT <- VlnPlot(
+  me.data,
+  features = c("TRDC", "TRGC1", "TRGC2", "KLRC1", "NKG7", "TRDV2", "CD7", "TRGV9", "KLRD1", "KLRG1"),
+  group.by = "seurat_clusters",
+  pt.size = 0
+)
+
+# Markers for pDCs
+pdc <-  VlnPlot(
+  me.data,
+  features = c("UGCG", "ITM2C", "PLD4", "SERPINF1", "LILRA4", "IL3RA", "TPM2", "MZB1", "SPIB", "IRF4", "SMPD3"),
+  group.by = "seurat_clusters",
+  pt.size = 0
+)
+
+plot <- Seurat::DotPlot(me.data, features = c("CD3D", "CD8A","CCR7","CD27","IL7R", "CD4","SELL", "CD79A", "MS4A1", "CD19", "FCER1A","SOX4",
+  "UGCG", "FCGR3A", "CD14", "GNLY", "NKG7", "GZMB", "SLC4A10", "FOXP3", "CD25", "CD45RA", "CD127", "CD45RO", "IGHM", "IGHD", "IL4R","CXCR4", "BTG1", "TCL1A", "CD79B", "YBX3")) +
+  ggplot2::theme(axis.text.x = ggplot2::element_text(angle = 90, vjust = 1,
+                                            size = 8, hjust = 1)) +
+  Seurat::NoLegend()
+plot.all <- Seurat::DotPlot(me.data, features = all.markers) +
+  ggplot2::theme(axis.text.x = ggplot2::element_text(angle = 90, vjust = 1,
+                                            size = 6)) +
+  Seurat::NoLegend()
+
+```
+
+```{r}
+cluster.ids <- c(
+  "uNK1",   # 0
+  "Naive CD4T", # 1
+  "Epithelial1", # 2
+  "M1-like macrophages",    # 3
+  "uNK2",  # 4
+  "M2-like macrophages",   # 5
+  "Stromal",    # 6
+  "gdT1",     # 7
+  "Endothelial",  # 8
+  "gdT2",   # 9
+  "B cells",   # 10
+  "NK dim", # 11
+  "Effector memory CD4 T",  # 12
+  "pDCs", # 13
+  "Epithelial2"# 14
+)
+
+names(cluster.ids) <- levels(me.data)
+me.data <- RenameIdents(me.data, cluster.ids)
+
+
+umap_ann <- DimPlot(me.data, reduction = "umap", label = TRUE, pt.size = 0.5, cols = c27) + NoLegend() #+ facet_wrap(~ident)
+
+all.markers <- c(
+  "MZB1", "CD79A", "CD79B", "IGHG1", "SDC1",
+  "CDH5", "PECAM1", "KDR", "TEK", "ENG",
+  "KRT8", "EPCAM", "KRT18", "MUC1", "CDH1", "ALCAM", "CD166",
+  "LYZ", "ITGAM", "CD33", "CSF1R", "CD14", "GPNMB", "APOC1", "TGFBI", "CD80", "CD86", "CD206", "CD64", "CD163",
+  "COL1A1", "VIM", "FN1", "PDGFRB", "ACTA2",
+  "TCF7", "CD4", "CD3D", "CCR7", "IL7R", "FHIT", "LEF1", "MAL", "NOSIP", "LDHB", "PIK3IP1", "CD27", "SELL", "FOXP3",
+  "CCL5", "FYB1", "GZMK", "IL32", "GZMA", "KLRB1", "TRAC", "LTB", "AQP3", "CD45RA",
+  "TMSB10", "ITGB1", "LINC02446", "CRTAM", "CD8A", "OXNAD1",
+  "GZMH", "KLRD1", "CST7", "TRGC2",
+  "GNLY", "TYROBP", "NKG7", "FCER1G", "GZMB", "TRDC", "PRF1", "FGFBP2", "SPON2", "KLRF1", "NCAM1","FCGR3A",
+  "CD45", "PTPRC", "CD56",
+  "TRGC1", "KLRC1", "TRDV2", "CD7", "TRGV9", "KLRG1",
+  "UGCG", "ITM2C", "PLD4", "SERPINF1", "LILRA4", "IL3RA", "TPM2", "SPIB", "IRF4", "SMPD3"
+)
+
+mark <- Seurat::DotPlot(me.data, features = all.markers) +
+  ggplot2::theme(axis.text.x = ggplot2::element_text(angle = 90, vjust = 1,
+                                            size = 6)) +
+  Seurat::NoLegend()
+
+feature_plot <- Seurat::FeaturePlot(me.data, features = all.markers) +
+  ggplot2::theme(axis.text.x = ggplot2::element_text(angle = 90, vjust = 1, size = 6)) +
+  Seurat::NoLegend()
+ggsave("/home/inf-21-2023/thesis/ME_scRNA/feature_plot.png", plot = feature_plot, width = 50, height = 50, limitsize = FALSE)
+saveRDS(me.data, file = "/home/inf-21-2023/thesis/ME_scRNA/me.rds")
+
+DimPlot(me.data, reduction = "umap", label = TRUE, label.size = 6) +
+  NoLegend() -> umap_plot
+ggsave(filename = "/home/inf-21-2023/thesis/ME_scRNA/umap_plot.png", plot = umap_plot, width = 10, height = 6)
+```
+```{r}
+cell_types_order <- c(
+  # Dendritic Cells
+  "pDCs",
+
+  # B and T Cells
+  "B cells", "Naive CD4T", "Effector memory CD4 T", "gdT1", "gdT2",
+
+  # NK & uNK Cells
+  "NK dim", "uNK1", "uNK2",
+
+  # Macrophages
+  "M1-like macrophages", "M2-like macrophages",
+
+  # Epithelial
+  "Epithelial1", "Epithelial2",
+
+  # Stromal & Endothelial
+  "Stromal", "Endothelial"
+)
+cell.markers <- all.markers[all.markers %in% rownames(me.data)]
+
+avg.exp <- AverageExpression(me.data, features = cell.markers, return.seurat = FALSE)$SCT
+
+scaled.avg <- scale(t(avg.exp))
+
+png("/home/inf-21-2023/thesis/ME_scRNA/heatmap_markers.png", width = 2000, height = 2000, res = 300)
+pheatmap(scaled.avg[cell_types_order, ],
+         cluster_rows = FALSE,
+         cluster_cols = TRUE,
+         show_rownames = TRUE,
+         show_colnames = TRUE,
+         fontsize_row = 8,
+         fontsize_col = 3,
+         breaks = seq(-2, 2, length.out = 101), # Limit scale from -2 to 2
+         #color = colorRampPalette(c("navy", "white", "firebrick3"))(100)
+         )
+dev.off()
+```
+```{r}
+B_cells <- c("MZB1", "CD79A", "CD79B", "IGHG1", "SDC1")
+Endothelial_cells <- c("CDH5", "PECAM1", "KDR", "TEK", "ENG")
+Epithelial_cells <- c("KRT8", "EPCAM", "KRT18", "MUC1", "CDH1", "ALCAM", "CD166")
+Myeloid_cells <- c("LYZ", "ITGAM", "CD33", "CSF1R", "CD14", "GPNMB", "APOC1", "TGFBI", "CD80", "CD86", "CD206", "CD64", "CD163")
+Stromal_cells <- c("COL1A1", "VIM", "FN1", "PDGFRB", "ACTA2")
+CD4_naive_T_cells <- c("TCF7", "CD4", "CD3D", "CCR7", "IL7R", "FHIT", "LEF1", "MAL", "NOSIP", "LDHB", "PIK3IP1", "CD27", "SELL", "FOXP3")
+Effector_memory_CD4_T_cells <- c("CCL5", "FYB1", "GZMK", "IL32", "GZMA", "KLRB1", "TRAC", "LTB", "AQP3", "CD45RA")
+CD8_T_cells <- c("TMSB10", "ITGB1", "LINC02446", "CRTAM", "CD8A", "OXNAD1")
+Cytotoxic_T_cells <- c("GZMH", "KLRD1", "CST7", "TRGC2")
+NK_cells <- c("GNLY", "TYROBP", "NKG7", "FCER1G", "GZMB", "TRDC", "PRF1", "FGFBP2", "SPON2", "KLRF1", "NCAM1")
+General_markers <- c("CD45", "PTPRC", "CD56")
+Gamma_delta_T_cells <- c("TRGC1", "KLRC1", "TRDV2", "CD7", "TRGV9", "KLRG1")
+Plasmacytoid_dendritic_cells <- c("UGCG", "ITM2C", "PLD4", "SERPINF1", "LILRA4", "IL3RA", "TPM2", "SPIB", "IRF4", "SMPD3")
+uNK <- c("CD45", "PTPRC", "CD56", "NCAM1", "KIR", "CD39")
+
+# Combine and deduplicate all markers
+all.markers <- unique(c(
+  B_cells, Endothelial_cells, Epithelial_cells, Myeloid_cells, Stromal_cells,
+  CD4_T_cells, Effector_memory_CD4_T_cells, CD8_T_cells, Cytotoxic_T_cells,
+  NK_cells, General_markers, Gamma_delta_T_cells, Plasmacytoid_dendritic_cells, uNK
+))
+
+# Save individual feature plots
+output_dir <- "/home/inf-21-2023/thesis/ME_scRNA/feature_plots"
+
+for (marker in all.markers) {
+  if (marker %in% rownames(me.data)) {
+    feature_plot <- FeaturePlot(me.data, features = marker) +
+      theme(axis.text.x = element_text(angle = 90, vjust = 1, size = 6)) +
+      NoLegend()
+
+    ggsave(
+      filename = file.path(output_dir, paste0("feature_plot_", marker, ".pdf")),
+      plot = feature_plot,
+      width = 10,
+      height = 10,
+      limitsize = FALSE
+    )
+  } else {
+    message(paste("Marker not found in dataset:", marker))
+  }
+}
+```
+
+Take a look at all the cell types and their counts
+```{r}
+me.data <- readRDS("/home/inf-21-2023/thesis/ME_scRNA/me.rds")
+
+me.data$cluster_names <- Idents(me.data)
+# View all the cell types
+unique(me.data@meta.data$cluster_names)
+
+# Visualise the number of cells per cell type (also can be seen in umap plots)
+cell_counts <- table(me.data@meta.data$cluster_names)
+cell_counts_df <- as.data.frame(cell_counts)
+colnames(cell_counts_df) <- c("cell_type", "count")
+
+# Plot the histogram
+plot_cell <- ggplot(cell_counts_df, aes(x = cell_type, y = count, fill = cell_type)) +
+  geom_bar(stat = "identity", position = "dodge") +
+  theme_classic() +
+  labs(title = "Number of Cells per cell type",
+       x = "Cell type",
+       y = "Cell Count") +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1))
+```
+```{r}
+cell_counts <- table(me.data@meta.data$subject_id, me.data@meta.data$cluster_names, me.data@meta.data$orig.ident)
+cell_counts_df <- as.data.frame(cell_counts)
+colnames(cell_counts_df) <- c("individual", "cell_type","Tissue", "count")
+
+# Plot the histogram
+ggplot(cell_counts_df, aes(x = individual, y = count, fill = cell_type)) +
+  geom_bar(stat = "identity", position = "dodge") +
+  theme_classic() +
+  facet_wrap(~cell_type, scales = "free_x") +
+  labs(title = "Number of Cells per Individual",
+       x = "Individual",
+       y = "Cell Count") +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1))
+```
+```{r}
+all.genes <- rownames(me.data)
+
+receptor_genes <- c("^ESR1$", "^ESR2$", "^PGR$","^NR3C3$","^PR$", "^AR$", "^GPER", "^LGR1","^FSHRO","^ODG1", "^FSHR", "^LHR", "^LCGR",
+"^LGR2", "^ULG5", "^LHRH","^LHRHR","LSH-R","HHG", "^GNRHR","^GRHR", "^LHRHR", "^GRH$", "^LHCGR" ,"^HHG", "^LCGR", "^LGR2", "LHR", "^ULG5", "^ODG4", "^FSH Receptor", "P23945-1", "P23945", "LH/CG-R","LSH-R","HHG", "ULG5", "LGR2", "LCGR" )
+
+filtered_genes <- grep(paste(receptor_genes,  collapse = "|"), all.genes, value = TRUE)
+
+cell_types_order <- c(
+  # T Cells (CD4 and CD8 T Cells)
+  "Naive CD4T", "Effector memory CD4 T",
+    # gamma delta T cells
+  "gdT1", "gdT2",
+  # NK Cells
+  "NK dim", "uNK1","uNK2",
+  # Macrophages
+  "M1-like macrophages", "M2-like macrophages",
+  # B Cells
+  "B cells",
+  # Dendritic Cells
+  "pDCs",
+  # Epithelial Cells
+  "Epithelial1", "Epithelial2",
+  # Endothelial Cells
+  "Endothelial",
+  # Stromal Cells
+  "Stromal"
+)
+
+receptors_order <- c("ESR1", "ESR2", "GPER1","PGR", "AR")
+```
+
+```{r}
+me.data <- subset(me.data, subset = cluster_names != "Epithelial1" & cluster_names != "Epithelial2" & cluster_names != "Stromal" & cluster_names != "Endothelial")
+
+expr_matrix <- GetAssayData(me.data, assay = "SCT", layer = "data")
+
+# For each receptor, assign status per cell
+for (receptor in receptors_order) {
+  if (receptor %in% rownames(expr_matrix)) {
+    expr_values <- expr_matrix[receptor, ]
+    me.data[[paste0(receptor, "_status")]] <- ifelse(expr_values > 0, "Positive", "Negative")
+  } else {
+    me.data[[paste0(receptor, "_status")]] <- NA
+  }
+}
+```
+
+```{r}
+expr_data <- FetchData(me.data, vars = c("subject_id","cluster_names", filtered_genes))
+
+expr_long <- melt(expr_data, id.vars = c("cluster_names", "subject_id"),
+                   variable.name = "gene", value.name = "expression")
+
+expr_long_percentage <- expr_long %>%
+  group_by(cluster_names, subject_id, gene) %>%
+  mutate(percent_expression = sum(expression > 0) / n() * 100
+) %>%
+  ungroup()
+
+#test <- expr_long %>%
+#  filter(cluster_names == "M1-like macrophages", subject_id == "TB13020946", gene == "ESR1")
+expr_long_percentage$subject_id <- factor(expr_long_percentage$subject_id, levels = unique(expr_long_percentage$subject_id))
+
+violin_plot <- ggplot(expr_long_percentage, aes(x = factor(gene, levels = receptors_order), y = percent_expression, fill = gene)) +
+  geom_violin() +
+  geom_point()+
+  theme_classic2()+
+  facet_wrap(~factor(cluster_names, levels = cell_types_order), scales = "free_y") +
+  labs(x = "Sex hormone receptor genes", y = "Percentage of cells", title = "Percentage of cells expressing the sex hormone receptors") +
+  theme(theme(
+  axis.text.x = element_text(angle = 45, hjust = 1, size = 19),
+  axis.text.y = element_text( size = 19),
+  axis.title.x = element_text(size = 16, face = "bold"),
+  axis.title.y = element_text(size = 16, face = "bold"),
+  plot.title = element_text(size = 18, face = "bold", hjust = 0.5),
+  strip.text = element_text(size = 18, face = "bold")
+))
+  #+stat_compare_means(aes(group = gene), method = "t.test", label = "p.signif", label.y = 1)
+
+violin_plot
+ggsave("/home/inf-21-2023/thesis/ME_scRNA/receptor_expression_percentage.png", violin_plot, width = 10, height = 8)
+
+expr_long_counts <- expr_long %>%
+  group_by(cluster_names, subject_id, gene) %>%
+  mutate(counts = sum(expression > 0)
+) %>%
+  ungroup()
+
+violin_plot_2 <- ggplot(expr_long_counts, aes(x = factor(gene, levels = receptors_order), y = counts, fill = gene)) +
+  geom_violin() +
+  geom_point()+
+  facet_wrap(~factor(cluster_names, levels = cell_types_order), scales = "free_y") +
+  labs(x = "Sex hormone receptor gene", y = "Cell count", title = "Number of cells expressing the sex hormone receptors") +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1), axis.text.y = element_text(angle = 45, hjust = 1))
+
+ggsave("/home/inf-21-2023/thesis/ME_scRNA/receptor_expression_counts.pdf", violin_plot_2, width = 20, height = 20)
+
+```
+
+```{r}
+heatmap <- ggplot(expr_long_percentage, aes(x = subject_id, y = factor(gene, levels = receptors_order), fill = percent_expression)) +
+  geom_tile() +
+  scale_fill_viridis_c(option = "plasma", na.value = "white") +
+  facet_wrap(~ factor(cluster_names, levels = cell_types_order), scales = "free_y") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5)) +  # Rotate for visibility
+  labs(x = "Subject", y = "Receptor Genes", fill = "Percent Expression")
+ggsave("/home/inf-21-2023/thesis/ME_scRNA/receptor_expression_heatmap.pdf", heatmap, width = 20, height = 20)
+```
+
+DE analysis for each receptor in each cluster
+
+```{r}
+test <- me.data
+test$ESR1_condition <- paste(test$cluster_names, test$ESR1_status, sep = "_")
+test$ESR2_condition <- paste(test$cluster_names, test$ESR2_status, sep = "_")
+test$GPER1_condition <- paste(test$cluster_names, test$GPER1_status, sep = "_")
+test$PGR_condition <- paste(test$cluster_names, test$PGR_status, sep = "_")
+test$AR_condition <- paste(test$cluster_names, test$AR_status, sep = "_")
+
+status_table <- test@meta.data %>%
+  select(cluster_names, ESR1_status, ESR2_status, GPER1_status, PGR_status, AR_status) %>%
+  pivot_longer(cols = c(ESR1_status, ESR2_status, GPER1_status, PGR_status, AR_status),
+               names_to = "Receptor", values_to = "Status") %>%
+  group_by(cluster_names, Receptor, Status) %>%
+  summarise(Count = n(), .groups = "drop") %>%
+  arrange(cluster_names, Receptor)
+status_table
+```
+```{r}
+receptors <- c("ESR1", "ESR2", "GPER1", "PGR", "AR")
+clusters <- unique(me.data$cluster_names)
+
+for (receptor in receptors) {
+  for (clust in clusters) {
+    message("Processing receptor: ", receptor, " in cluster: ", clust)
+    condition_col <- paste0(receptor, "_condition")
+    status_col <- paste0(receptor, "_status")
+
+    me.data[[condition_col]] <- paste(me.data$cluster_names, me.data[[status_col]], sep = "_")
+    Idents(me.data) <- condition_col
+
+    id1 <- paste0(clust, "_Positive")
+    id2 <- paste0(clust, "_Negative")
+
+    # Pseudobulk DESeq2
+    pseudobulk <- AggregateExpression(me.data, assays = "RNA", return.seurat = TRUE, group.by = c(status_col, "subject_id", "cluster_names"))
+    pseudobulk@meta.data[[condition_col]] <- paste(
+      pseudobulk@meta.data$cluster_names,
+      pseudobulk@meta.data[[status_col]],
+      sep = "_"
+    )
+    Idents(pseudobulk) <- condition_col
+
+    if (!(id1 %in% levels(pseudobulk)) | !(id2 %in% levels(pseudobulk))) {
+      message("Skipping DESeq2 for ", receptor, " in ", clust, ": one or both conditions not present in pseudobulk.")
+      next
+    }
+    if (sum(Idents(pseudobulk) == id1) < 3 | sum(Idents(pseudobulk) == id2) < 3) {
+      message("Skipping DESeq2 for ", receptor, " in ", clust, ": one or both conditions have fewer than 3 cells.")
+      next
+    }
+    bulk.de <- FindMarkers(pseudobulk, ident.1 = id1, ident.2 = id2, test.use = "DESeq2", verbose = TRUE)
+    write.csv(bulk.de, file = paste0("/home/inf-21-2023/thesis/ME_scRNA/", clust, "_", receptor, "_DESeq2.csv"))
+  }
+}
+```
+
+
+```{r}
+
+result_path <- "/home/inf-21-2023/thesis/ME_scRNA/"
+result_df <- data.frame()
+
+for (receptor in receptors) {
+  csv_files <- list.files(result_path, pattern = paste0("_", receptor, "_DESeq2.csv$"), full.names = TRUE)
+
+  for (file in csv_files) {
+    cluster <- sub(paste0("_", receptor, "_DESeq2.csv"), "", basename(file))
+    de_result <- read.csv(file, row.names = 1)
+
+    if (!"avg_log2FC" %in% colnames(de_result)) next
+
+    up <- sum(de_result$avg_log2FC > 0 & de_result$p_val_adj <= 0.05, na.rm = TRUE)
+    down <- sum(de_result$avg_log2FC < 0 & de_result$p_val_adj <= 0.05, na.rm = TRUE)
+
+    result_df <- rbind(result_df, data.frame(cluster = cluster, receptor = receptor, upregulated = up, downregulated = down))
+  }
+}
+
+for (receptor in unique(result_df$receptor)) {
+  receptor_df <- result_df %>% filter(receptor == !!receptor)
+
+  result_long <- receptor_df %>%
+    pivot_longer(cols = c(upregulated, downregulated), names_to = "regulation", values_to = "gene_count") %>%
+    arrange(desc(gene_count))
+
+  result_long$regulation <- factor(result_long$regulation, levels = c("downregulated", "upregulated"))
+
+  cluster_order <- result_long %>%
+    group_by(cluster) %>%
+    summarise(total = sum(gene_count)) %>%
+    arrange(desc(total)) %>%
+    pull(cluster)
+
+  result_long$cluster <- factor(result_long$cluster, levels = cluster_order)
+
+  bar.plot <- ggplot(result_long, aes(x = cluster, fill = regulation)) +
+    geom_col(data = subset(result_long, regulation == "upregulated"),
+             aes(y = gene_count), width = 0.6) +
+    geom_col(data = subset(result_long, regulation == "downregulated"),
+             aes(y = -gene_count), width = 0.6) +
+    scale_y_continuous(labels = abs) +
+    geom_text(
+      data = subset(result_long, regulation == "upregulated" & gene_count > 0),
+      aes(y = gene_count / 2, label = gene_count),
+      color = "black", size = 8
+    ) +
+    geom_text(
+      data = subset(result_long, regulation == "downregulated" & gene_count > 0),
+      aes(y = -gene_count / 2, label = gene_count),
+      color = "white", size = 8
+    ) +
+    scale_fill_manual(
+      values = c("upregulated" = "red", "downregulated" = "blue"),
+      labels = c("Upregulated", "Downregulated")
+    ) +
+    theme_classic2() +
+    xlab("Cell Type") +
+    ylab("Number of Genes") +
+    ggtitle(paste("Number of significant upregulated & downregulated genes:", receptor)) +
+    theme(axis.text.x = element_text(angle = 45, hjust = 1, size = 20, face = "bold"), axis.title.x = element_text(size = 16, face = "bold"),
+          axis.title.y = element_text(size = 16, face = "bold"),
+          axis.text.y = element_text(size = 18, face = "bold"), plot.title = element_text(size = 16, face = "bold"))
+
+
+  # Create output directory
+  out_dir <- file.path(paste0(result_path, paste0(receptor, "_DE")))
+  if (!dir.exists(out_dir)) dir.create(out_dir, recursive = TRUE)
+
+  # Save plot
+  ggsave(filename = file.path(out_dir, paste0("barplot_", receptor, ".png")),
+         plot = bar.plot, width = 10, height = 6, dpi = 300)
+}
+```
+
+```{r}
+
+logFC_threshold <- 1
+alpha <- 0.05
+
+for (receptor in receptors) {
+  output <- file.path("/home/inf-21-2023/thesis/ME_scRNA", paste0(receptor, "_DE"))
+  if (!dir.exists(output)) dir.create(output, recursive = TRUE)
+
+  csv_files <- list.files(result_path, pattern = paste0("_", receptor, "_DESeq2.csv$"), full.names = TRUE)
+
+  for (file in csv_files) {
+    cluster <- sub(paste0("_", receptor, "_DESeq2.csv"), "", basename(file))
+    message("Plotting volcano plot for: ", cluster, " and receptor: ", receptor)
+
+    # Read DE result
+    de_result <- read.csv(file, row.names = 1)
+    if (!all(c("avg_log2FC", "p_val", "p_val_adj") %in% colnames(de_result))) next
+
+    de_result$gene <- rownames(de_result)
+
+    # Rename for plotting
+    volcano_df <- de_result
+
+    # Color
+    volcano_df$color <- case_when(
+      abs(volcano_df$avg_log2FC) > logFC_threshold & volcano_df$p_val_adj < alpha ~ "red",
+      abs(volcano_df$avg_log2FC) > logFC_threshold & volcano_df$p_val_adj >= alpha ~ "pink",
+      abs(volcano_df$avg_log2FC) < logFC_threshold & volcano_df$p_val_adj < alpha ~ "pink",
+      TRUE ~ "gray"
+    )
+
+    DEGs_table <- volcano_df %>%
+      filter(p_val_adj < alpha) %>% # adjusted p value
+      arrange(p_val_adj) %>%
+      top_n(10, wt = abs(avg_log2FC))
+
+    p <- ggplot(volcano_df, aes(x = avg_log2FC, y = -log10(p_val))) +
+      geom_point(aes(color = color), size = 2) +
+      geom_vline(xintercept = c(-logFC_threshold, logFC_threshold), linetype = "dashed", color = "gray") +
+      geom_hline(yintercept = -log10(alpha), linetype = "dashed", color = "gray") +
+      labs(title = paste("Volcano plot -", cluster, receptor, "status"),
+           x = "log2 Fold Change", y = "-log10(p-value)") +
+      ggrepel::geom_text_repel(data = DEGs_table,
+                               aes(label = gene),
+                               size = 3, color = "black") +
+      scale_color_manual(values = c("red" = "red", "pink" = "pink", "gray" = "gray"),
+                         labels = c("red" = "Significant", "pink" = "p_val_adj", "gray" = "NS"),
+                         name = "Significance") +
+      theme_minimal() +
+      theme(legend.position = "bottom")
+
+    ggsave(filename = file.path(output, paste0(cluster, "_", receptor, "_volcano.pdf")),
+           plot = p, width = 10, height = 10)
+  }
+}
+```
+```{r}
+unique.cell.types <- unique(me.data$cluster_names)
+
+cell_type_colors <- setNames(
+ c(
+   "dodgerblue2", "#E31A1C", # red
+   "green4",
+   "#6A3D9A", # purple
+   "#FF7F00", # orange
+   "gray15", "gold1",
+   "skyblue2", "#FB9A99", # lt pink
+   "palegreen2",
+   "#CAB2D6", # lt purple
+   "#FDBF6F", # lt orange
+   "gray70", "khaki2",
+   "maroon", "orchid1", "deeppink1", "blue1", "steelblue4",
+   "darkturquoise", "green1", "yellow4", "yellow3",
+   "darkorange4", "brown",
+   "purple", "pink", "cyan", "magenta", "yellow", "gray", "lightblue", "lightgreen"
+ )[seq_along(unique.cell.types)],
+ unique.cell.types
+)
+
+logFC_threshold <- 1
+alpha <- 0.05
+
+for (receptor in receptors) {
+ combined_df <- data.frame()
+ csv_files <- list.files(result_path, pattern = paste0("_", receptor, "_DESeq2.csv$"), full.names = TRUE)
+
+ # Process each file and combine the data
+ for (file in csv_files) {
+   cluster <- sub(paste0("_", receptor, "_DESeq2.csv"), "", basename(file))
+   message("Processing file: ", file)
+   de_result <- read.csv(file, row.names = 1)
+
+   if (!all(c("avg_log2FC", "p_val", "p_val_adj") %in% colnames(de_result))) next
+
+   de_result$gene <- rownames(de_result)
+   de_result$cell_type <- cluster
+
+   combined_df <- rbind(combined_df, de_result)
+ }
+ combined_df$significant <- abs(combined_df$avg_log2FC) > logFC_threshold & combined_df$p_val_adj < alpha
+
+ DEGs_to_label <- combined_df %>%
+     filter(significant) %>%
+     group_by(cell_type) %>%
+     top_n(10, wt = abs(avg_log2FC)) %>%
+     ungroup()
+
+ # Create the volcano plot for all cell types
+ p2 <- ggplot(combined_df, aes(x = avg_log2FC, y = -log10(p_val))) +
+     theme_minimal() +
+     geom_point(data = subset(combined_df, !significant),
+                color = "grey", size = 1, alpha = 0.3) +
+     geom_point(data = subset(combined_df, significant),
+                aes(color = cell_type), size = 2) +
+     geom_vline(xintercept = c(-logFC_threshold, logFC_threshold),
+                linetype = "dashed", color = "gray", alpha = 0.5) +
+     geom_hline(yintercept = -log10(alpha),
+                linetype = "dashed", color = "gray", alpha = 0.5) +
+     ggrepel::geom_text_repel(data = DEGs_to_label,
+                    aes(label = gene, color = cell_type),
+                    size = 3,
+                    max.overlaps = 40,
+                    box.padding = 0.5,
+                    segment.color = "grey50",
+                    segment.alpha = 0.6) +
+     labs(title = paste("DEGs in All Cell Types -", receptor),
+          x = "logFC",
+          y = "-log10(p-value)") +
+     theme(
+       plot.title = element_text(hjust = 0.5, size = 14, face = "bold"),
+       axis.title = element_text(size = 12),
+       axis.text = element_text(size = 10),
+       panel.grid.major = element_line(color = "grey90"),
+       panel.grid.minor = element_line(color = "grey95"),
+       legend.position = "none" # Hide legend for cleaner look
+     ) +
+     scale_color_manual(values = cell_type_colors) +
+     guides(color = guide_legend(title = "Cell type")) +
+     theme(legend.position = "bottom")
+
+ ggsave(file = file.path(result_path, paste0(receptor, "_DE/combined_volcano_", receptor, ".pdf")),
+        plot = p2, width = 20, height = 20)
+}
+```
+
+```{r}
+BTM_plus <- read_tsv("/home/inf-21-2023/thesis/scRNAseq_data_oelen/BTM_plus_hs_t2g.tsv")
+
+btm_db <- BTM_plus %>%
+  gather(key = "term", value = "gene") %>%
+  filter(!is.na(gene))
+```
+```{r}
+receptors <- c("ESR1", "ESR2", "GPER1", "PGR", "AR")
+
+for (receptor in receptors) {
+  result_path <- "/home/inf-21-2023/thesis/ME_scRNA"
+  csv_files <- list.files(result_path, pattern = paste0("_", receptor, "_DESeq2.csv$"), full.names = TRUE)
+
+  result_df <- data.frame()
+  message("Processing receptor: ", receptor)
+  for (file in csv_files) {
+    cluster <- sub(paste0("_", receptor, "_DESeq2.csv"), "", basename(file))
+    de_result <- read.csv(file, row.names = 1)
+
+    if (!"avg_log2FC" %in% colnames(de_result)) next
+
+    # Count upregulated and downregulated
+    gene <- rownames(de_result)
+    avglog2fc <- de_result$avg_log2FC
+    p_val_adj <- de_result$p_val_adj
+    p_val <- de_result$p_val
+
+    result_df <- rbind(result_df, data.frame(cluster = cluster, gene = gene, log2fc = avglog2fc, p_val_adj = p_val_adj, p_val = p_val))
+  }
+  cell_types <- unique(result_df$cluster)
+
+  make_gene_list <- function(cell_type) {
+    d <- result_df %>%
+      filter(cluster == !!cell_type) %>%
+      dplyr::select(gene, log2fc) # ranked based on logfc
+    geneList <- d$log2fc
+    names(geneList) <- as.character(d$gene)
+    geneList <- sort(geneList, decreasing = TRUE)
+    return(geneList)
+  }
+
+  cluster_list <- lapply(cell_types, make_gene_list)
+  names(cluster_list) <- cell_types
+  gsea_btm <- compareCluster(cluster_list,
+                              fun = "GSEA",
+                              TERM2GENE = btm_db,
+                              pvalueCutoff = 1,
+                              pAdjustMethod = "BH",
+                              #nPermSimple = 10000,
+                              verbose = FALSE)
+
+  dotplot_clusters <- gsea_btm %>%
+    filter(p.adjust < 0.05) %>%
+    arrange(desc(NES)) %>%
+    dotplot(color = "NES",
+            size = "setSize",
+            showCategory = 6,
+            font.size = 10,
+            label_format = 100) +
+    labs(x = NULL) +
+    scale_fill_gradient2(
+      low = "#0050A0", high = "#C64700", mid = "white", midpoint = 0,
+      limits = c(-max(abs(gsea_btm@compareClusterResult$NES)), max(abs(gsea_btm@compareClusterResult$NES))),
+      breaks = c(max(abs(gsea_btm@compareClusterResult$NES)), -max(abs(gsea_btm@compareClusterResult$NES))),
+      labels = c(paste("Enriched in", receptor, "positive"), paste("Enriched in", receptor, "negative"))
+    ) +
+    theme(axis.text.x = element_text(angle = 45, hjust = 1, size = 14, face = "bold"),
+							        axis.text.y = element_text(size = 16, face = "bold"),
+							        axis.title.x = element_text(size = 16, face = "bold"),
+							        axis.title.y = element_text(size = 16, face = "bold"),
+                                    legend.text = element_text(size = 14),
+                                    legend.title = element_text(size = 16, face = "bold"))
+
+  # Save the plot
+ggsave(filename = file.path(result_path, paste0(receptor, "_dotplot.png")),
+plot = dotplot_clusters, width = 20, height = 10)
+
+#  df <- filter(gsea_btm@compareClusterResult, p.adjust < 0.05)
+#  df_list <- split(df, df$Cluster)
+
+ # new_df_list <- list()
+
+#  for (i in seq_along(df_list)) {
+#    cluster_name <- names(df_list)[i]  # Get the cluster name
+#    cluster_data <- df_list[[i]]       # Get the list of dataframes for this cluster
+#
+#    new_df_list[[cluster_name]] <- cluster_data[["Description"]]
+#  }
+
+#if (length(new_df_list) >= 2) {
+#  png(file.path(result_path, paste0("upset_plot_", receptor, ".png")), width = 2800, height = 900, res = 150)
+#  upset(fromList(new_df_list), nsets = length(new_df_list), order.by = "freq", text.scale = 1.3)
+#  dev.off()
+#}
+}
+```
+```{r}
+library(report)
+cite_packages()
+```
+```{r}
+sessionInfo()
+```
