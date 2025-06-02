@@ -1,0 +1,252 @@
+---
+title: "Differential Expression Analysis"
+output: html_notebook
+---
+
+```{r}
+knitr::opts_chunk$set(echo = TRUE,
+                      eval = TRUE,
+                      message = FALSE,
+                      warning = FALSE)
+options(max.print=200)
+```
+DIFFERENTIAL EXPRESSION ANALYSIS IN HEALTHY FEMALE PBMCs
+
+This script uses the pbmc dataset from the Oelen et al 2022 paper which has been analysed and annotated with cell type, sex as well as sex hormone receptors in the previous scripts - V2_pbmc.rmd, sex_hormone_analyisis.rmd
+This script also only looks at female samples.
+The script follows the standard seurat pipeline for differntial expression. First we take a look at the number of immune cells that are sex hormone postive vs negative.
+Then based on the results, I have picked DESeq2 for the test, since it does pseudobulking.
+In the FindMarkers function, it looks at individual cell types per receptor, for example:
+CD4T Naive cells positive for ESR1 vs CD4T Naive cells negative for ESR1 and finds all the differentially expressed genes between these two conditions.
+The upregulated genes and the downregulated genes are saved as bar plots. The top diffrentially expressed genes are also visualised as volcano plots.
+
+```{r}
+library(Seurat)
+library(data.table)
+library(dplyr)
+library(ggplot2)
+library(dittoSeq)
+library(speckle)
+library(patchwork)
+library(ComplexHeatmap)
+library(tidyr)
+library(colorRamp2)
+library(readxl)
+library(scCustomize)
+library(reshape2)
+library(knitr)
+library(tibble)
+library(cellXY)
+library(SingleCellExperiment)
+library(caret)
+library(randomForest)
+library(viridis)
+library(ggplotify)
+library(lme4)
+library(muscatWrapper)
+library(writexl)
+library(ggpubr)
+library(kableExtra)
+library(SeuratData)
+library(limma)
+library(scales)
+library(MAST)
+# SET SEED FOR REPRODUCIBILITY
+set.seed(123)
+```
+Load the rds file (saved with sex hormone receptor status from "sex_hormone_analysis.rmd")
+```{r}
+pbmc.UT <- readRDS("/home/inf-21-2023/thesis/scRNAseq_data_oelen/pbmc_UT_receptor.rds")
+```
+A rough check of the number of cells that are positive and negative for the sex hormone recptors
+```{r}
+table(pbmc.UT$cluster_names, pbmc.UT$ESR1_status)
+table(pbmc.UT$cluster_names, pbmc.UT$ESR2_status)
+table(pbmc.UT$cluster_names, pbmc.UT$GPER1_status)
+table(pbmc.UT$cluster_names, pbmc.UT$AR_status)
+```
+As the results show really unbalanced amount of positive vs negative cells, DESeq2 was chosen instead of Muscat.
+
+Find the differentially expressed genes, in all the immune cell types using DESeq2
+```{r}
+clusters <- unique(pbmc.UT$cluster_names)
+receptors <- c("ESR1", "ESR2", "GPER1", "AR")
+
+for (receptor in receptors) {
+    message("Processing receptor: ", receptor)
+    message("Checking status column existence for receptor: ", receptor)
+    status_column <- paste0(receptor, "_status")
+    if (!status_column %in% colnames(pbmc.UT@meta.data)) {
+      message("Skipping receptor ", receptor, ": Status column missing.")
+      next
+    }
+
+    condition_column <- paste0(receptor, "_condition")
+    pbmc.UT[[condition_column]] <- paste(pbmc.UT$cluster_names, pbmc.UT[[status_column]], sep = "_")
+    Idents(pbmc.UT) <- condition_column
+
+    # Pseudobulk DESeq2
+    message("Checking ", receptor, " status column contents: ", table(pbmc.UT[[status_column]]))
+
+    pseudobulk <- AggregateExpression(pbmc.UT, assays = "RNA", return.seurat = TRUE, group.by = c(status_column, "subject", "cluster_names"))
+
+  for(clust in clusters){
+    message("Processing cluster: ", clust)
+    id1 <- paste0(clust, "_Positive")
+    id2 <- paste0(clust, "_Negative")
+    pseudobulk@meta.data[[condition_column]] <- paste(
+      pseudobulk@meta.data$cluster_names,
+      pseudobulk@meta.data[[status_column]],
+      sep = "_"
+    )
+    Idents(pseudobulk) <- condition_column
+    if (!(id1 %in% levels(pseudobulk)) | !(id2 %in% levels(pseudobulk))) {
+      message("Skipping DESeq2 for ", clust, " and receptor: ", receptor, ": Only one present or both conditions absent in pseudobulk.")
+      next
+    }
+    if (sum(Idents(pseudobulk) == id1) < 3 | sum(Idents(pseudobulk) == id2) < 3) {
+      message("Skipping DESeq2 for ", clust, " and receptor: ", receptor, ": one or both conditions have fewer than 3 cells.")
+      next
+    }
+    bulk.de <- FindMarkers(pseudobulk, ident.1 = id1, ident.2 = id2, test.use = "DESeq2", verbose = TRUE)
+    write.csv(bulk.de, file = paste0("/home/inf-21-2023/thesis/scRNAseq_data_oelen/DE_results/", clust, "_", receptor, "_DESeq2.csv"))
+  }
+}
+```
+
+
+PLot the bar graphs for the number of upregulated and downregulated genes in each cell type for each receptor
+```{r}
+for (receptor in receptors) {
+  result_path <- "/home/inf-21-2023/thesis/scRNAseq_data_oelen/DE_results/"
+  csv_files <- list.files(result_path, pattern = paste0("_", receptor, "_DESeq2.csv$"), full.names = TRUE)
+
+  result_df <- data.frame()
+
+  # Loop over each file
+  for (file in csv_files) {
+    cluster <- sub(paste0("_", receptor, "_DESeq2.csv"), "", basename(file))
+    de_result <- read.csv(file, row.names = 1)
+
+    if (!"avg_log2FC" %in% colnames(de_result)) next
+
+    # Count upregulated and downregulated
+    up <- sum(de_result$avg_log2FC > 0 & de_result$p_val_adj < 0.05, na.rm = TRUE)
+    down <- sum(de_result$avg_log2FC < 0 & de_result$p_val_adj < 0.05, na.rm = TRUE)
+
+    result_df <- rbind(result_df, data.frame(cluster = cluster, upregulated = up, downregulated = down))
+  }
+
+  result_long <- result_df %>%
+    pivot_longer(cols = c(upregulated, downregulated), names_to = "regulation", values_to = "gene_count") %>%
+    arrange(desc(gene_count))
+
+  result_long$regulation <- factor(result_long$regulation, levels = c("downregulated", "upregulated"))
+
+  cluster_order <- result_long %>%
+    group_by(cluster) %>%
+    summarise(total = sum(gene_count)) %>%
+    arrange(desc(total)) %>%
+    pull(cluster)
+
+  result_long$cluster <- factor(result_long$cluster, levels = cluster_order)
+
+  bar.plot <- ggplot(result_long, aes(x = cluster, fill = regulation)) +
+    geom_col(data = subset(result_long, regulation == "upregulated"),
+             aes(y = gene_count), width = 0.6) +
+    geom_col(data = subset(result_long, regulation == "downregulated"),
+             aes(y = -gene_count), width = 0.6) +
+    scale_y_continuous(labels = abs) +
+    geom_text(
+      data = subset(result_long, regulation == "upregulated" & gene_count > 0),
+      aes(y = gene_count / 2, label = gene_count, color = regulation),
+      color = "black", size = 8
+    ) +
+    geom_text(
+      data = subset(result_long, regulation == "downregulated" & gene_count > 0),
+      aes(y = -gene_count / 2, label = gene_count, color = regulation),
+      color = "white", size = 8
+    ) +
+    scale_fill_manual(
+      values = c("upregulated" = "red", "downregulated" = "blue"),
+      labels = c("Upregulated", "Downregulated"),
+      guide = guide_legend(title = "Regulation", title.theme = element_text(size = 18), label.theme = element_text(size = 18))
+    ) +
+    theme_classic2() +
+    xlab("Cell Type") +
+    ylab("Number of Genes") +
+    theme(axis.title.x = element_text(size = 25), axis.title.y = element_text(size = 30)) +
+    ggtitle(paste("Number of significant upregulated & downregulated genes in cells positive for", receptor)) +
+    theme(axis.text.x = element_text(angle = 45, hjust = 1, size = 20, face = "bold"),
+          axis.text.y = element_text(size = 20, face = "bold"), plot.title = element_text(size = 20, face = "bold"))
+
+  ggsave(filename = paste0(result_path, receptor, "_barplot.png"), plot = bar.plot, width = 20, height = 8)
+}
+```
+
+Plot the volcano plots for each cell type and receptor
+```{r}
+
+logFC_threshold <- 1
+alpha <- 0.05
+
+for (receptor in receptors) {
+  output <- paste0("/home/inf-21-2023/thesis/scRNAseq_data_oelen/", receptor, "_DE/")
+  csv_files <- list.files("/home/inf-21-2023/thesis/scRNAseq_data_oelen/DE_results/", pattern = paste0(receptor, "_DESeq2.csv$"), full.names = TRUE)
+
+  for (file in csv_files) {
+    cluster <- sub(paste0("_", receptor, "_DESeq2.csv"), "", basename(file))
+    message("Plotting volcano plot for: ", cluster, " (Receptor: ", receptor, ")")
+
+    # Read DE result
+    de_result <- read.csv(file, row.names = 1)
+    if (!all(c("avg_log2FC", "p_val", "p_val_adj") %in% colnames(de_result))) next
+
+    de_result$gene <- rownames(de_result)
+
+    # Rename for plotting
+    volcano_df <- de_result
+
+    # Color
+    volcano_df$color <- case_when(
+      abs(volcano_df$avg_log2FC) > logFC_threshold & volcano_df$p_val_adj < alpha ~ "red",
+      abs(volcano_df$avg_log2FC) > logFC_threshold & volcano_df$p_val_adj >= alpha ~ "pink",
+      abs(volcano_df$avg_log2FC) < logFC_threshold & volcano_df$p_val_adj < alpha ~ "pink",
+      TRUE ~ "gray"
+    )
+
+    DEGs_table <- volcano_df %>%
+      filter(p_val_adj < alpha) %>% # ajusted p value
+      arrange(p_val_adj) %>%
+      top_n(10, wt = abs(avg_log2FC))
+
+    p <- ggplot(ungroup(volcano_df), aes(x = avg_log2FC, y = -log10(p_val))) +
+      geom_point(aes(color = color), size = 2) +
+      geom_vline(xintercept = c(-logFC_threshold, logFC_threshold), linetype = "dashed", color = "gray") +
+      geom_hline(yintercept = -log10(alpha), linetype = "dashed", color = "gray") +
+      labs(title = paste("Volcano plot -", cluster, receptor, "receptor status"),
+           x = "log2 Fold Change", y = "-log10(p-value)") +
+      ggrepel::geom_text_repel(data = DEGs_table,
+                               aes(label = gene),
+                               size = 3, color = "black") +
+      scale_color_manual(values = c("red" = "red", "pink" = "pink", "gray" = "gray"),
+                         labels = c("red" = "Significant", "pink" = "p_val_adj", "gray" = "NS"),
+                         name = "Significance") +
+      theme_minimal() +
+      theme(axis.title.x = element_text(size = 15), axis.title.y = element_text(size = 15)) +
+      theme(legend.position = "bottom") +
+      theme(axis.text.x = element_text(angle = 45, hjust = 1, size = 10),
+            axis.text.y = element_text(size = 10))
+    ggsave(filename = file.path(output, paste0(cluster, "_", receptor, "_volcano.pdf")),
+           plot = p, width = 10, height = 10)
+  }
+}
+```
+```{r}
+library(report)
+cite_packages()
+```
+```{r}
+sessionInfo()
+```
+

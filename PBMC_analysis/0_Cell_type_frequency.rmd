@@ -1,0 +1,854 @@
+---
+title: "scRNAseq PBMC Cell type proportions"
+Author: "Pooja"
+date: "2025"
+output:
+  html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE,
+                      eval = TRUE,
+                      message = FALSE,
+                      warning = FALSE)
+options(max.print=200)
+```
+CELL TYPE PROPORTIONS IN HEALTHY MALE AND FEMALE PBMCs
+
+This script uses the pbmc dataset from the Oelen et al 2022 paper
+datasets: https://eqtlgen.org/sc/datasets/1m-scbloodnl.html
+paper: https://www.nature.com/articles/s41467-022-30893-5
+The datasets include the single cells captured and sequenced using v2 reagents through the 10x Genomics controller
+In the folder, there must be a barcode file, features file and the matrix file to read.
+The cell type info and the pathogen information were also downloaded from the website.
+
+The script follows manual annotation using known markers from literature to compare the annotations from the given paper.
+The quality control steps follow the standard Seurat pipeline and then the results are analaysed and visualised to see the different cell types found in PBMCs (Peripheral Blood Mononuclear Cells)
+The cells are assigned sex information from another function that applies cellXY to predict the sex.
+The analysis is then stratified by sex to see the difference in cell type proportions between the two biological sexes - males and females.
+
+
+Load required libraries
+```{r}
+library(Seurat)
+library(data.table)
+library(dplyr)
+library(ggplot2)
+library(dittoSeq)
+library(speckle)
+library(patchwork)
+library(ComplexHeatmap)
+library(tidyr)
+library(colorRamp2)
+library(readxl)
+library(scCustomize)
+library(reshape2)
+library(knitr)
+library(tibble)
+library(cellXY)
+library(SingleCellExperiment)
+library(caret)
+library(randomForest)
+library(viridis)
+library(ggplotify)
+library(lme4)
+library(muscatWrapper)
+library(writexl)
+library(ggpubr)
+library(kableExtra)
+library(Azimuth)
+library(SeuratData)
+library(limma)
+library(scales)
+# SET SEED FOR REPRODUCIBILITY
+set.seed(123)
+```
+Load the data and create Seurat object
+Download only the V2 chem datasets
+```{r}
+pbmc_v2_data <- Read10X("/home/inf-21-2023/thesis/scRNAseq_data_oelen/RNA_matrix/raw_v2", gene.column = 1, cell.column = 1)
+pbmc_v2_RNA <- CreateSeuratObject(counts = pbmc_v2_data, project = "pbmc_v2_RNA")
+```
+
+Load metadata and add the info to the Seurat object - this step is to annotate the cell types based on the given metadata and add the time point and subject information to the Seurat object
+```{r}
+# READ THE CELL TYPE INFO
+cell.info <- fread("/home/inf-21-2023/thesis/scRNAseq_data_oelen/normalised_qc/info/1M_cell_types.tsv")
+
+# READ PATHOGEN INFO
+pathogen.info <- fread("/home/inf-21-2023/thesis/scRNAseq_data_oelen/normalised_qc/info/1M_assignments_conditions_expid.tsv")
+
+# Load the meta data
+meta_data <- read_xlsx("/home/inf-21-2023/thesis/scRNAseq_data_oelen/normalised_qc/info/meta_data.xlsx")
+```
+
+```{r}
+#ADDING THE META DATA TO THE SEURAT OBJECT
+pbmc_v2_RNA$cell_type <- cell.info$cell_type_lowerres[match(colnames(pbmc_v2_RNA), cell.info$barcode)]
+pbmc_v2_RNA$cell_subtype <- cell.info$cell_type[match(colnames(pbmc_v2_RNA), cell.info$barcode)]
+pbmc_v2_RNA$subject <- pathogen.info$assignment[match(colnames(pbmc_v2_RNA), pathogen.info$barcode)]
+pbmc_v2_RNA$timepoint <- pathogen.info$timepoint[match(colnames(pbmc_v2_RNA), pathogen.info$barcode)]
+```
+
+Filter the data based on the time point and only store control samples. Then perform quality control and filtering of the data.
+The filtering is based on the number of features, number of counts, percentage of mitochondrial genes and percentage of hemoglobin genes. The filtering is done to remove low quality cells/dying cells and cells with high mitochondrial content.
+```{r}
+#Subset the data to only include control samples
+pbmc.UT <- subset(pbmc_v2_RNA, subset = timepoint == "UT")
+
+## QUALITY CONTROL ##
+#Percentage mitochondrial genes
+pbmc.UT[["percent.mt"]] <- PercentageFeatureSet(pbmc.UT, pattern = "^MT-")
+
+# Percentage hemoglobin genes
+pbmc.UT <- PercentageFeatureSet(pbmc.UT, "^HB[^(P)]", col.name = "percent_hb")
+
+#Visualise the data before filtering to adjust the filtering parameters
+v.plot <- VlnPlot(pbmc.UT, features = c("nFeature_RNA", "nCount_RNA", "percent.mt", "percent_hb"), ncol = 4)
+v.plot <- v.plot + plot_annotation(title = "Before filtering")
+#ggsave(filename = "/home/inf-21-2023/thesis/scRNAseq_data_oelen/results/violin_plot.png", plot = v.plot, width = 10)
+
+#Filtering the data
+pbmc.UT <- subset(pbmc.UT, subset = nFeature_RNA > 200 & nFeature_RNA < 3000 & percent.mt < 5 & percent_hb < 2)
+
+#Visualise the data after filtering
+v.plot2 <- VlnPlot(pbmc.UT, features = c("nFeature_RNA", "nCount_RNA", "percent.mt", "percent_hb"), ncol = 4)
+v.plot2 <- v.plot2 + plot_annotation(title = "After filtering")
+#ggsave(filename = "/home/inf-21-2023/thesis/scRNAseq_data_oelen/results/violin_plot2.png", plot = v.plot2, width = 10)
+```
+
+[//]: # (```{r, echo = FALSE, message=FALSE, warning=FALSE})
+
+[//]: # (To annotate the cell types using Azimuth)
+
+[//]: # ()
+[//]: # (#options&#40;future.globals.maxSize = 1000 * 1024^3&#41;)
+
+[//]: # (pbmc.UT <- RunAzimuth&#40;pbmc.UT, reference = "pbmcref"&#41;)
+
+[//]: # (# Then continnue with the normalisaion and dimensionality reduction steps.)
+
+[//]: # (```)
+
+Normalisation, finding variable features and scaling the data
+```{r}
+# Normalisation
+pbmc.UT <- NormalizeData(pbmc.UT, normalization.method = "LogNormalize", scale.factor = 10000)
+
+# Find variable features
+pbmc.UT <- FindVariableFeatures(pbmc.UT, selection.method = "vst", nfeatures = 2000)
+
+# Scale the data
+all.genes <- rownames(pbmc.UT)
+pbmc.UT <- ScaleData(pbmc.UT, features = all.genes)
+gc()
+
+#saveRDS(pbmc.UT, file = "/home/inf-21-2023/thesis/scRNAseq_data_oelen/pbmc_UT_v2.rds")
+```
+
+Dimensionality reduction to visualise the data
+```{r}
+#pbmc.UT <- readRDS("/home/inf-21-2023/thesis/scRNAseq_data_oelen/pbmc_UT_v2.rds")
+# PCA
+pbmc.UT <- RunPCA(pbmc.UT, features = VariableFeatures(object = pbmc.UT))
+
+## This part is taken from the Seurat documentation - https://hbctraining.github.io/scRNA-seq/lessons/elbow_plot_metric.html ##
+# Determine percent of variation associated with each PC
+pct <- pbmc.UT[["pca"]]@stdev / sum(pbmc.UT[["pca"]]@stdev) * 100
+
+# Calculate cumulative percents for each PC
+cumu <- cumsum(pct)
+
+# Determine which PC exhibits cumulative percent greater than 90% and % variation associated with the PC as less than 5
+co1 <- which(cumu > 90 & pct < 5)[1]
+co1
+
+# Determine the difference between variation of PC and subsequent PC
+co2 <- sort(which((pct[1:length(pct) - 1] - pct[2:length(pct)]) > 0.1), decreasing = T)[1] + 1
+
+# last point where change of % of variation is more than 0.1%.
+co2
+
+# Minimum of the two calculation
+pcs <- min(co1, co2)
+
+pcs
+# Create a dataframe with values
+plot_df <- data.frame(pct = pct,
+           cumu = cumu,
+           rank = 1:length(pct))
+
+# Elbow plot to visualize
+#ggplot(plot_df, aes(cumu, pct, label = rank, color = rank > pcs)) +
+#        geom_text() +
+#        geom_vline(xintercept = 90, color = "grey") +
+#        geom_hline(yintercept = min(pct[pct > 5]), color = "grey") +
+#        theme_bw()
+
+# Find clusters, adjust the dims based on the above results
+pbmc.UT <- FindNeighbors(pbmc.UT, dims = 1:16)
+pbmc.UT<- FindClusters(pbmc.UT, resolution = c(0.5))
+
+# Non linear dimensionality reduction
+pbmc.UT <- RunUMAP(pbmc.UT, dims = 1:16)
+saveRDS(pbmc.UT, file = "/home/inf-21-2023/thesis/scRNAseq_data_oelen/pbmc_UT_v2.rds")
+#pbmc.UT <- readRDS("/home/inf-21-2023/thesis/scRNAseq_data_oelen/pbmc_UT_v2.rds")
+```
+
+
+```{r}
+# PLot UMAP for the cell type annotation from the paper
+DimPlot(pbmc.UT, reduction = "umap", group.by = "cell_subtype",  repel = TRUE, raster = FALSE, label = TRUE) +
+  facet_wrap(~cell_subtype) + NoLegend()
+
+# PLot UMAP for the cell type annotation from the Azimuth
+#DimPlot(pbmc.UT, reduction = "umap", group.by = "predicted.celltype.l2",  repel = TRUE, raster = FALSE, label = TRUE) +
+#  facet_wrap(~predicted.celltype.l2) + NoLegend()
+
+```
+To annotate the cell types using the known markers and Find markers function from seurat
+```{r}
+# Find markers for all clusters
+pbmc.markers <- FindAllMarkers(pbmc.UT, only.pos = TRUE, assay = "RNA")
+
+pbmc.markers %>%
+    group_by(cluster) %>%
+    dplyr::filter(avg_log2FC > 1) %>%
+    slice_head(n = 5) %>%
+    ungroup() -> top5
+
+```
+Plot the markers
+![The marker list and annotation info was taken from here](/home/inf-21-2023/thesis/scRNAseq_data_oelen/markers.png){width="50%"}
+As well as the marker list from Azimuth (https://azimuth.hubmapconsortium.org/references/)
+```{r}
+pbmc.UT <- readRDS("/home/inf-21-2023/thesis/scRNAseq_data_oelen/pbmc_UT_v2.rds")
+
+DimPlot(pbmc.UT, reduction = "umap", group.by = "seurat_clusters",  repel = TRUE, raster = FALSE, label = TRUE) +
+  facet_wrap(~"seurat_clusters") + NoLegend()
+
+# Plot markers
+Seurat::DotPlot(pbmc.UT, features = unique(top5$gene)) +
+  ggplot2::theme(axis.text.x = ggplot2::element_text(angle = 90, vjust = 1,
+                                            size = 8, hjust = 1)) +
+  Seurat::NoLegend()
+ggsave(filename = "/home/inf-21-2023/thesis/scRNAseq_data_oelen/results/dot_plot.png", plot = last_plot(), width = 10)
+
+all.markers = c("TCF7", "CD4", "CD3D", "CCR7", "IL7R", "FHIT", "LEF1", "MAL", "NOSIP", "LDHB", "PIK3IP1", "CD27",
+ "CCL5", "FYB1", "GZMK", "IL32", "GZMA", "KLRB1", "TRAC", "LTB", "AQP3", "TMSB10", "ITGB1",
+ "CD8B", "S100B", "RGS10", "LINC02446", "CRTAM", "CD8A", "OXNAD1", "GZMH", "KLRD1", "CST7", "TRGC2",
+ "GNLY", "TYROBP", "NKG7", "FCER1G", "GZMB", "TRDC", "PRF1", "FGFBP2", "SPON2", "KLRF1", "MKI67", "TYMS",
+ "TOP2A", "PCLAF", "CD247", "CLSPN", "ASPM", "XCL2", "SPINK2", "KLRC1", "XCL1", "SPTSSB", "PPP1R9A", "NCAM1",
+ "TNFRSF11A", "CD14", "S100A9", "CTSS", "S100A8", "LYZ", "VCAN", "S100A12", "IL1B", "G0S2", "FCN1", "CDKN1C",
+ "FCGR3A", "PTPRC", "LST1", "IER5", "MS4A7", "RHOC", "IFITM3", "AIF1", "HES4", "IGHM", "IGHD", "CD79A", "IL4R",
+ "MS4A1", "CXCR4", "BTG1", "TCL1A", "CD79B", "YBX3", "IGHA2", "MZB1", "TNFRSF17", "DERL3", "TXNDC5", "TNFRSF13B",
+ "POU2AF1", "CPNE5", "HRASLS2", "NT5DC2", "UGCG", "ITM2C", "PLD4", "SERPINF1", "LILRA4", "IL3RA", "TPM2", "SPIB",
+ "IRF4", "SMPD3", "PRSS57", "CYTL1", "EGFL7", "GATA2", "CD34", "SMIM24", "AVP", "MYB", "LAPTM4B", "PPBP", "PF4",
+ "NRGN", "GNG11", "CAVIN2", "TUBB1", "CLU", "HIST1H2AC", "RGS18", "GP9")
+
+# Plot known markers for general calssification
+VlnPlot(
+  pbmc.UT,
+  features =c("CD4", "CD8A", "CD8B", "CCR7", "SELL", "IL7R", "TCF7", "LEF1", "CD27", "CD28", "GZMA", "GZMB"),
+  group.by = "seurat_clusters",
+  pt.size = 0
+)
+
+# Markers for CD4 T naive cells
+VlnPlot(
+  pbmc.UT,
+ features = c("TCF7", "CD4","CD3D", "CCR7", "IL7R", "FHIT", "LEF1", "MAL", "NOSIP", "LDHB", "PIK3IP1", "CD27"),
+  group.by = "seurat_clusters",
+  pt.size = 0
+)
+
+
+# Markers for CD4 effector memory T cells
+VlnPlot(
+  pbmc.UT,
+  features = c("IL7R", "CCL5", "FYB1", "GZMK", "IL32", "GZMA", "KLRB1", "TRAC", "LTB", "AQP3"),
+  group.by = "seurat_clusters",
+  pt.size = 0
+)
+
+# Markers for central memory CD4T
+VlnPlot(
+  pbmc.UT,
+  features = c("IL7R", "TMSB10", "CD4", "ITGB1", "LTB", "TRAC", "AQP3", "LDHB", "IL32", "MAL"),
+  group.by = "seurat_clusters",
+  pt.size = 0
+)
+
+# Markers for naive CD8 T cells
+VlnPlot(
+  pbmc.UT,
+  features = c("CD8B", "S100B", "CCR7", "RGS10", "NOSIP", "LINC02446", "LEF1", "CRTAM", "CD8A", "OXNAD1"),
+  group.by = "seurat_clusters",
+  pt.size = 0
+)
+
+# Markers for CD8 effector memory T cells
+VlnPlot(
+  pbmc.UT,
+  features = c("CCL5", "GZMH", "CD8A", "TRAC", "KLRD1", "CST7", "CD8B", "TRGC2"),
+  group.by = "seurat_clusters",
+  pt.size = 0
+)
+
+
+# Markers for NK dim cells
+VlnPlot(
+  pbmc.UT,
+  features = c("GNLY", "TYROBP", "NKG7", "FCER1G", "GZMB", "TRDC", "PRF1", "FGFBP2", "SPON2", "KLRF1"),
+  group.by = "seurat_clusters",
+  pt.size = 0
+)
+
+
+# Markers for NK Proliferating cells
+VlnPlot(
+  pbmc.UT,
+  features = c("MKI67", "KLRF1", "TYMS", "TRDC", "TOP2A", "FCER1G", "PCLAF", "CD247", "CLSPN", "ASPM"),
+  group.by = "seurat_clusters",
+  pt.size = 0
+)
+
+# Markers for NK bright cells
+VlnPlot(
+  pbmc.UT,
+  features = c("XCL2", "FCER1G", "SPINK2", "TRDC", "KLRC1", "XCL1", "SPTSSB", "PPP1R9A", "NCAM1", "TNFRSF11A"),
+  group.by = "seurat_clusters",
+  pt.size = 0
+)
+
+# Markers for Cd14+ monocytes
+VlnPlot(
+  pbmc.UT,
+  features = c("CD14", "S100A9", "CTSS", "S100A8", "LYZ", "VCAN", "S100A12", "IL1B", "G0S2", "FCN1"),
+  group.by = "seurat_clusters",
+  pt.size = 0
+)
+
+# Markers for CD16+ monocytes
+VlnPlot(
+  pbmc.UT,
+  features = c("CDKN1C", "FCGR3A", "PTPRC", "LST1", "IER5", "MS4A7", "RHOC", "IFITM3", "AIF1", "HES4"),
+  group.by = "seurat_clusters",
+  pt.size = 0
+)
+
+# Markers for Naive B cells
+VlnPlot(
+  pbmc.UT,
+  features = c("IGHM", "IGHD", "CD79A", "IL4R", "MS4A1", "CXCR4", "BTG1", "TCL1A", "CD79B", "YBX3"),
+  group.by = "seurat_clusters",
+  pt.size = 0
+)
+
+# Markers for plasmablasts
+VlnPlot(
+  pbmc.UT,
+  features = c("IGHA2", "MZB1", "TNFRSF17", "DERL3", "TXNDC5", "TNFRSF13B", "POU2AF1", "CPNE5", "HRASLS2", "NT5DC2"),
+  group.by = "seurat_clusters",
+  pt.size = 0
+)
+
+
+# Marker for cDCs
+VlnPlot(
+  pbmc.UT,
+  features = c("FCER1A"),
+  group.by = "seurat_clusters",
+  pt.size = 0
+)
+
+# Markers for pDCs
+ VlnPlot(
+  pbmc.UT,
+  features = c("UGCG", "ITM2C", "PLD4", "SERPINF1", "LILRA4", "IL3RA", "TPM2", "MZB1", "SPIB", "IRF4", "SMPD3"),
+  group.by = "seurat_clusters",
+  pt.size = 0
+)
+
+# Markers for HSPCs
+ VlnPlot(
+  pbmc.UT,
+  features = c("SPINK2", "PRSS57", "CYTL1", "EGFL7", "GATA2", "CD34", "SMIM24", "AVP", "MYB", "LAPTM4B"),
+  group.by = "seurat_clusters",
+  pt.size = 0
+)
+
+# Markers for Megakaryocytes
+VlnPlot(
+  pbmc.UT,
+  features = c("PPBP", "PF4", "NRGN", "GNG11", "CAVIN2", "TUBB1", "CLU", "HIST1H2AC", "RGS18", "GP9"),
+  group.by = "seurat_clusters",
+  pt.size = 0
+)
+
+# Dot plot fpor top markers
+Seurat::DotPlot(pbmc.UT, features = c("CD3D", "CD8A","CCR7","CD27","IL7R", "CD4","SELL", "CD79A", "MS4A1", "CD19", "FCER1A","SOX4",
+  "UGCG", "FCGR3A", "CD14", "GNLY", "NKG7", "GZMB", "SLC4A10", "FOXP3", "CD25", "CD45RA", "CD127", "CD45RO", "IGHM", "IGHD", "IL4R","CXCR4", "BTG1", "TCL1A", "CD79B", "YBX3")) +
+  ggplot2::theme(axis.text.x = ggplot2::element_text(angle = 90, vjust = 1,
+                                            size = 8, hjust = 1)) +
+  Seurat::NoLegend()
+ggsave("/home/inf-21-2023/thesis/scRNAseq_data_oelen/results/dot_plot_knownmarkers.png", plot = last_plot(), width = 10)
+
+# PLot all the markers using the dot plot function to check for the expression of the common markers for unamed clusters
+Seurat::DotPlot(pbmc.UT, features = all.markers) +
+  ggplot2::theme(axis.text.x = ggplot2::element_text(angle = 90, vjust = 1,
+                                            size = 6)) +
+  Seurat::NoLegend()
+ggsave("/home/inf-21-2023/thesis/scRNAseq_data_oelen/results/dot_plot_markers.png", plot = last_plot() + theme(plot.background = element_rect(fill = "white")), width = 10)
+
+```
+Rename the clusters from the cell types identified above
+```{r}
+
+cluster.ids <- c(
+  "CD4 Naive T",   # 0
+  "Effector memory CD4T", # 1
+  "Effector memory CD8T", # 2
+  "NK dim",    # 3
+  "Central memory CD4T",  # 4
+  "CD14+ Monocytes",   # 5
+  "Naive CD8T",    # 6
+  "NK bright",     # 7
+  "Monocytes1",  # 8
+  "CD16+ Monocytes",   # 9
+  "B cells",   # 10
+  "cDCs", # 11
+  "Megakaryocytes",  # 12
+  "Monocytes2", # 13
+  "pDCs", # 14
+  "HSPCs", # 15
+  "NK Proliferating", #16
+  "Plasma B cells" # 17
+)
+
+names(cluster.ids) <- levels(pbmc.UT)
+pbmc.UT <- RenameIdents(pbmc.UT, cluster.ids)
+```
+```{r}
+# Since the monocytes population is a bit unclear, Mono1 is similar to CD14 and Mono2 to CD16, run find markers against each other
+monocytes1_vs_cd14 <- FindMarkers(
+  pbmc.UT,
+  ident.1 = "Monocytes1",
+  ident.2 = "CD14+ Monocytes",
+  assay = "RNA")
+
+monocytes1_vs_cd14 %>%
+  filter(abs(avg_log2FC) > 1, p_val_adj < 0.05) %>%
+  slice_head(n = 10) %>%
+    ungroup() -> top5_monocytes1_vs_cd14
+
+p <- VlnPlot(pbmc.UT, features = rownames(top5_monocytes1_vs_cd14))
+ggsave(p, file = "/home/inf-21-2023/thesis/scRNAseq_data_oelen/results/vln_plot_CD14.png")
+# Compare Monocytes 2 vs CD16 Monocytes
+
+monocytes2_vs_cd16 <- FindMarkers(
+  pbmc.UT,
+  ident.1 = "Monocytes2",
+  ident.2 = "CD16+ Monocytes",
+  assay = "RNA")
+
+monocytes2_vs_cd16 %>%
+  filter(abs(avg_log2FC) > 1, p_val_adj < 0.05) %>%
+   slice_head(n = 10) %>%
+    ungroup() -> top5_monocytes2_vs_cd16
+
+p2 <- VlnPlot(pbmc.UT, features = rownames(top5_monocytes2_vs_cd16))
+
+ggsave(p2, file = "/home/inf-21-2023/thesis/scRNAseq_data_oelen/results/vln_plot_CD16.png")
+
+# Now rename the monocytes population
+new.cluster.ids <- c(
+  "CD4 Naive T",   # 0
+  "Effector memory CD4T", # 1
+  "Effector memory CD8T", # 2
+  "NK dim",    # 3
+  "Central memory CD4T",  # 4
+  "CD14+ Monocytes",   # 5
+  "Naive CD8T",    # 6
+  "NK bright",     # 7
+  "CD14+ Proinflammatory Monocytes",  # 8
+  "CD16+ Monocytes",   # 9
+  "B cells",   # 10
+  "cDCs", # 11
+  "Megakaryocytes",  # 12
+  "CD16+ Monocytes ISG", # 13
+  "pDCs", # 14
+  "HSPCs", # 15
+  "NK Proliferating", #16
+  "Plasma B cells" # 17
+)
+
+names(new.cluster.ids) <- levels(pbmc.UT)
+pbmc.UT <- RenameIdents(pbmc.UT, new.cluster.ids)
+
+c27 <- c(
+  "dodgerblue2", "#E31A1C", # red
+  "green4",
+  "#6A3D9A", # purple
+  "#FF7F00", # orange
+  "skyblue2", "#FB9A99", # lt pink
+  "palegreen2",
+  "#CAB2D6", # lt purple
+  "#FDBF6F", # lt orange
+  "gray70", "khaki2",
+  "maroon", "orchid1", "deeppink1", "blue1", "steelblue4",
+  "darkturquoise", "green1", "yellow4", "yellow3",
+  "darkorange4", "brown",
+  "purple", "pink", "cyan", "magenta", "yellow", "gray", "lightblue", "lightgreen"
+)
+
+# Save the plot as a high-resolution PNG
+png("/home/inf-21-2023/thesis/scRNAseq_data_oelen/results/umap_plot.png", width = 3000, height = 2500, res = 300)
+DimPlot(pbmc.UT, reduction = "umap", label = TRUE, pt.size = 0.5,
+        cols = c27, label.size = 6) + NoLegend()
+dev.off()
+
+pbmc.UT$cluster_names <- Idents(pbmc.UT)
+
+Seurat::DotPlot(pbmc.UT, features = all.markers) +
+  ggplot2::theme(axis.text.x = ggplot2::element_text(angle = 90, vjust = 1,
+                                            size = 10)) +
+  Seurat::NoLegend()
+ggsave("/home/inf-21-2023/thesis/scRNAseq_data_oelen/results/dot_plot_markers.png", plot = last_plot() + theme(plot.background = element_rect(fill = "white")), width = 20)
+#saveRDS(pbmc.UT, file = "/home/inf-21-2023/thesis/scRNAseq_data_oelen/pbmc_UT_v2_sexannotated.rds")
+```
+```{r}
+
+cell_types_order <- c(
+  # T Cells (CD4 and CD8 T Cells)
+  "CD4 Naive T", "Central memory CD4T", "Effector memory CD4T",
+  "Naive CD8T", "Effector memory CD8T",
+  # NK Cells
+  "NK dim", "NK bright", "NK Proliferating",
+  # Monocytes
+  "CD14+ Monocytes", "CD14+ Proinflammatory Monocytes",
+  "CD16+ Monocytes", "CD16+ Monocytes ISG",
+  # B Cells
+  "B cells", "Plasma B cells",
+  # Dendritic Cells
+  "cDCs", "pDCs",
+  #
+  "HSPCs", "Megakaryocytes"
+)
+cell.markers <- all.markers[all.markers %in% rownames(pbmc.UT)]
+
+avg.exp <- AverageExpression(pbmc.UT, features = cell.markers, return.seurat = FALSE)$RNA
+
+scaled.avg <- scale(t(avg.exp))
+
+png("/home/inf-21-2023/thesis/scRNAseq_data_oelen/results/heatmap_markers.png", width = 4000, height = 2000, res = 300)
+pheatmap(scaled.avg[cell_types_order, ],
+         cluster_rows = FALSE,
+         cluster_cols = TRUE,
+         show_rownames = TRUE,
+         show_colnames = TRUE,
+         fontsize_row = 10,
+         fontsize_col = 6,
+         breaks = seq(-2, 2, length.out = 101), # Limit scale from -2 to 2
+         #color = colorRampPalette(c("navy", "white", "firebrick3"))(100)
+         )
+dev.off()
+```
+Now that the cell types are annotated, we can continue to look at the proportion of cell types between males and females.
+For that we need to cross-check if the metadata annotation matches cellXY annotation.
+```{r}
+sex_info <- meta_data$sex
+
+# Sort the subjects in increasing order of Id number and assign the sex to the meta data of the seurat object
+sorted_subjects <- sort(unique(pbmc.UT@meta.data$subject))
+
+pbmc.UT@meta.data$sex <- sex_info[match(pbmc.UT@meta.data$subject, sorted_subjects)]
+
+# Load the sex_assign function
+source("/home/inf-21-2023/thesis/scRNAseq_data_oelen/sex_assign.R")
+
+pbmc_out <- SexAssign(pbmc.UT)
+
+# you get multiple lists of results, with seurat object, the table with sex assignment and plots, so add the seurat obj back to the original obj name
+pbmc.UT <- pbmc_out[[1]]
+
+saveRDS(pbmc.UT, file = "/home/inf-21-2023/thesis/scRNAseq_data_oelen/pbmc_UT_v2_sexannotated.rds")
+```
+Take a look at all the cell types and their counts
+```{r}
+# View all the cell types
+unique(pbmc.UT@meta.data$cluster_names)
+
+# NUMBER OF MALES AND FEMALES AFTER
+table(unique(pbmc.UT@meta.data[, c("subject", "Predicted_sex")])$Predicted_sex)
+
+# Visualise the number of cells per cell type (also can be seen in umap plots)
+cell_counts <- table(pbmc.UT@meta.data$cluster_names)
+cell_counts_df <- as.data.frame(cell_counts)
+colnames(cell_counts_df) <- c("cell_type", "count")
+
+# Plot the histogram
+plot_cell <- ggplot(cell_counts_df, aes(x = cell_type, y = count, fill = cell_type)) +
+  geom_bar(stat = "identity", position = "dodge") +
+  theme_classic() +
+  labs(title = "Number of Cells per cell type",
+       x = "Cell type",
+       y = "Cell Count") +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1))
+```
+Visualise the cell type counts per individual
+```{r}
+cell_counts <- table(pbmc.UT@meta.data$subject, pbmc.UT@meta.data$cluster_names, pbmc.UT@meta.data$Predicted_sex)
+cell_counts_df <- as.data.frame(cell_counts)
+colnames(cell_counts_df) <- c("individual", "cell_type","sex", "count")
+
+# Plot the histogram
+ggplot(cell_counts_df, aes(x = individual, y = count, fill = cell_type)) +
+  geom_bar(stat = "identity", position = "dodge") +
+  theme_classic() +
+  facet_wrap(~cell_type, scales = "free_x") +
+  labs(title = "Number of Cells per Individual",
+       x = "Individual",
+       y = "Cell Count") +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1))
+```
+To look at the cell type proportions between the two biological sexes
+```{r}
+# Visualse the cell type distribuion for male and female individuals
+dittoBarPlot(pbmc.UT, var = "cluster_names", group.by = "subject", main = "Cell type distribution between females and males", xlab = "cell type", ylab = NULL,split.by = "Predicted_sex", split.adjust = list(scales = "free_x"))
+```
+It is difficult to see the difference, so we have to sort them based on the abundance of a particular cell type
+```{r}
+# Store the data table
+table <- dittoBarPlot(pbmc.UT, var = "cluster_names", group.by = "subject", main = "Cell type distribution between females and males", xlab = "cell type", ylab = NULL,split.by = "Predicted_sex", split.adjust = list(scales = "free_y"))$data
+
+# Sort the table by the highest cell type count by percent in the above table
+donors_sorted <- table %>%
+  filter(label == "Central memory CD4T") %>%
+  arrange(percent) %>%
+  pull(grouping)
+
+# Visualise the data again to see a pattern
+table %>%
+  mutate(grouping = factor(grouping, levels = donors_sorted)) %>%
+  ggplot(aes(x = grouping, y= percent, fill =label)) + geom_bar(position ="stack", stat = "identity")+
+  facet_grid(~ Predicted_sex, scales = "free_x")+
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+#ggsave("/home/inf-21-2023/thesis/scRNAseq_data_oelen/results/celltype_by_sex_v2.pdf", plot = last_plot() , width = 20, height = 20)
+
+```
+```{r}
+# Visualise the differences through box plots and a T test
+png("/home/inf-21-2023/thesis/scRNAseq_data_oelen/results/box_plot.png", width = 6000, height = 2500, res = 300)
+table %>%
+  mutate(grouping = factor(grouping, levels = donors_sorted)) %>%
+  ggplot(aes(x = Predicted_sex, y = percent, fill = Predicted_sex)) +
+    geom_boxplot() +
+    #stat_boxplot(geom = "errorbar", width = 0.25) +     # Add error bars (showing 95% confidence interval)
+    geom_jitter(width = 0.2, alpha = 0.7, size = 2) +
+    facet_wrap(~ label, scales = "free_y") +
+    scale_fill_manual(values = c("M" = "#595959", "F" = "#eb4fb2")) +
+    labs(
+      title = "Distribution of Cell Types by Sex",
+      x = "Sex",
+      y = "Percent (%)",
+      fill = "Sex"
+    ) +
+    theme_classic2()+
+  theme(
+    plot.title = element_text(size = 20),
+    legend.text = element_text(size = 12),
+    legend.title = element_text(size = 15),
+    axis.text = element_text(size = 20),
+    axis.title = element_text(size = 20),
+    axis.text.x = element_text(size = 15),
+    axis.text.y = element_text(size = 15),
+    strip.text = element_text(size = 15, face = "bold")
+  )#+
+  #stat_compare_means(method = "t.test",label = "p.signif", label.x = 1.5)
+dev.off()
+#ggsave(plot, filename = "/home/inf-21-2023/thesis/scRNAseq_data_oelen/results/distribution_of_cell_types_by_sex.pdf", width = 20, height = 20)
+```
+
+There is no significant difference in cell type distribution from males and females acc to the box plot. Now do speckle test
+```{r}
+# CALCULATE THE CELL TYPE PROPORTIONS USING SPECKLE
+props <- getTransformedProps(clusters = pbmc.UT$cluster_names,
+                             sample = pbmc.UT$subject, transform = "logit")
+
+# CONVERT IT TO A DATAFRAME
+freq_df <- props$Proportions %>%
+        as.data.frame() %>%
+        tidyr::pivot_wider(names_from = "clusters",
+                    values_from = "Freq",
+                    ) %>%
+        tibble::column_to_rownames("sample") %>%
+        na.omit()
+
+freq_matrix <- as.matrix(freq_df)
+```
+
+```{r}
+
+cell_counts <- table(pbmc.UT@meta.data$subject, pbmc.UT@meta.data$cluster_names, pbmc.UT@meta.data$Predicted_sex)
+cell_counts_df <- as.data.frame(cell_counts)
+colnames(cell_counts_df) <- c("individual", "cell_type","sex", "count")
+
+# Compute the total number of cells per individual
+total_cell_abundance <- aggregate(count ~ individual, data = cell_counts_df, sum)
+total_abundance_vector <- total_cell_abundance$count[match(rownames(freq_matrix), total_cell_abundance$individual)]
+
+subject_sex <- unique(pbmc.UT@meta.data[, c("subject", "Predicted_sex")])
+rownames(subject_sex) <- subject_sex$subject
+
+# Reorder the matrix
+freq_matrix <- freq_matrix[order(total_abundance_vector, decreasing = TRUE), ]
+subject_sex <- subject_sex[order(match(subject_sex$subject, rownames(freq_matrix))), ]
+
+column_ha = rowAnnotation(
+  sex = subject_sex$Predicted_sex,
+  col = list(sex =  c("M" = "#595959", "F" = "#eb4fb2"))
+)
+
+heatmap <- Heatmap(freq_matrix,
+    name = "Frequency",
+    show_row_names = TRUE,
+    show_column_names = TRUE,
+    cluster_columns = FALSE,
+    cluster_rows = FALSE,
+    row_names_gp = gpar(fontsize=8),
+    left_annotation = column_ha,
+    col = viridis::viridis(100),
+    row_split = subject_sex$Predicted_sex  # Split rows by sex
+)
+
+#pdf("/home/inf-21-2023/thesis/scRNAseq_data_oelen/results/speckle_heatmap_split_by_sex_cell_type.pdf", width = 20, height = 20)
+draw(heatmap)
+#dev.off()
+```
+If needed, you can rearrange by a specific cell type
+```{r}
+
+freq_matrix <- freq_matrix[order(freq_matrix[, "central memory CD4T"], decreasing = TRUE), ]
+
+column_ha = rowAnnotation(
+  sex = subject_sex$Predicted_sex,
+  col = list(sex =  c("M" = "#595959", "F" = "#eb4fb2"))
+)
+
+heatmap <- Heatmap(freq_matrix,
+    name = "Frequency",
+    show_row_names = TRUE,
+    show_column_names = TRUE,
+    cluster_columns = FALSE,
+    cluster_rows = FALSE,
+    row_names_gp = gpar(fontsize=8),
+    left_annotation = column_ha,
+    col = viridis::viridis(100),
+    row_split = subject_sex$Predicted_sex  # Split rows by sex
+)
+
+```
+The heatmaps are a bit difficult tp visualise the differnces!!
+
+To see if sex explains the variance observed
+```{r}
+#variance info
+cellfreq <- props$Proportions %>%
+        as.data.frame() %>%
+        tidyr::pivot_wider(names_from = "clusters",
+                    values_from = "Freq",
+                    ) %>%
+        tibble::column_to_rownames("sample")
+
+meta.data <- pbmc.UT@meta.data
+
+sample_info <- meta.data %>%
+  distinct(Predicted_sex, subject, orig.ident) %>%
+  mutate(project = gsub("-", "_",
+                        orig.ident)) %>%
+        arrange(subject)
+
+adonis.res <- vegan::adonis2(cellfreq ~ Predicted_sex, data = sample_info, method = "euclidean", permutations = 999)
+
+variance_plot <- data.frame(
+  Component = c("Predicted_sex", "Residual"),
+  SumOfSqs = c(adonis.res$SumOfSqs[1], adonis.res$SumOfSqs[2])
+)
+
+# Convert Component to factor for ordering
+variance_plot$Component <- factor(variance_plot$Component, levels = c("Residual", "Predicted_sex"))
+
+# Plot stacked bar plot
+ggplot(variance_plot, aes(x = "", y = SumOfSqs, fill = Component)) +
+  geom_bar(stat = "identity") +
+  coord_flip() +
+  labs(y = "Sum of Squares", x = "", title = "Variance Partitioning") +
+  theme_classic() +
+  scale_fill_manual(values = c("Residual" = "#ff4500", "orig.ident" = "#00ff7f", "Predicted_sex" = "#836fff"),
+                    labels = c("Residual" = "Residual", "orig.ident" = "Chemistry", "Predicted_sex" = "Sex"))+
+                    theme(              axis.text.y =element_blank(),
+              axis.ticks.y = element_blank(),
+  )
+```
+Run propeller test to see the cell type proportion difference between sexes
+```{r}
+
+res <- propeller(clusters = pbmc.UT$cluster_names, sample = pbmc.UT$subject, group = pbmc.UT$Predicted_sex)
+res$cell_type <- rownames(res)
+res$PropRatioLog2 <- log2(res$PropRatio) #Female/Male
+res$M_F_Log2Ratio <- log2(res$PropMean.M / res$PropMean.F) #Male/Female
+res$sign <- ifelse(res$P.Value < 0.05, "**",
+                                  ifelse(res$P.Value < 0.1, "*", ""))
+```
+
+```{r}
+res %>%      mutate(simplified_ct = case_when(
+        cell_type %in% c("CD4 Naive T", "Effector memory CD4T", "Central memory CD4T") ~ "CD4 T cells",
+        cell_type %in% c("Effector memory CD8T", "naive CD8T") ~ "CD8 T cells",
+        cell_type %in% c("NK dim", "NK bright", "NK Proliferating") ~ "NK cells",
+        cell_type %in% c("CD14+ Monocytes", "CD16+ Monocytes", "CD14+ Proinflammatory Monocytes", "CD16+ Monocytes ISG") ~ "Monocytes",
+        cell_type %in% c("Naive B cells", "Plasma B cells") ~ "B cells",
+        cell_type == "cDCs" ~ "Conventional Dendritic cells",
+        cell_type == "pDCs" ~ "Plasmacytoid DCs",
+        cell_type == "HSPCs" ~ "Hematopoietic stem cells",
+        cell_type == "Megakaryocytes" ~ "Megakaryocytes",
+        TRUE ~ "Other"
+      )) %>%
+        # sort by PropRatioLog2 for ggplot
+        arrange(M_F_Log2Ratio) %>%
+        mutate(cell_type = factor(cell_type, levels = cell_type)) %>%
+        # plot
+        ggplot(aes(x = M_F_Log2Ratio, y = cell_type,
+                   color = simplified_ct)) +
+
+        geom_vline(xintercept = 0, linetype = "longdash", color = "grey",
+                   linewidth = 1.5, ) +
+        geom_point(size = 6) +
+        theme_classic() +
+        theme(axis.title = element_text(size = 30),
+              axis.text = element_text(size = 25),
+              legend.title = element_text(size = 25),
+              legend.text = element_text(size = 30),
+         plot.title = element_text(size = 20)) +
+        # plot title
+        labs(title = "Cell type ratio between Males and Females ",
+             color = "Simplified cell type") +
+        # axis limits
+        xlim(c(-1, 1)) +
+        #axis title
+        xlab("Log2(Male/Female)") +
+        ylab("Cell type") -> dotplot_simpl
+png("/home/inf-21-2023/thesis/scRNAseq_data_oelen/results/log2fc_plot.png", width = 4500, height = 4000, res = 300)
+dotplot_simpl
+dev.off()
+#ggsave(dotplot_simpl, file = "/home/inf-21-2023/thesis/scRNAseq_data_oelen/results/log2male_female.pdf", width = 20, height = 20)
+```
+```{r}
+library(report)
+cite_packages()
+```
+```{r}
+sessionInfo()
+
+```

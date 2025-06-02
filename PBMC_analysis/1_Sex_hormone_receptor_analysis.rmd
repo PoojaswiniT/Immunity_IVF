@@ -1,0 +1,152 @@
+---
+title: "Sex hormone analysis"
+output: html_notebook
+---
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE,
+                      eval = TRUE,
+                      message = FALSE,
+                      warning = FALSE)
+options(max.print=200)
+```
+SEX HORMONE ANALYSIS IN HEALTHY FEMALE PBMCs
+
+This script uses the pbmc dataset from the Oelen et al 2022 paper which has been analysed and annotated in the previous script - V2_pbmc.rmd
+
+The script follows the annotation of the immune cell types, whether or not they express the sex hormone receptors such as ESR1, ESR2, GPER1, PGR, AR, FSHR, LHR, GNRHR.
+The script searchers for all possible aliases of the above menstioned sex hormone receptors in the dataset and captures those that are present.
+In order to not miss any genes that could have been filtered out during QC, 'all.genes' from the previous script was cross checked as well.
+The script also filters out all the male samples, as the focus of the project is to understand the imapct of the sex hormones with respect to women's reproductive success.
+
+```{r}
+library(Seurat)
+library(data.table)
+library(dplyr)
+library(ggplot2)
+library(dittoSeq)
+library(speckle)
+library(patchwork)
+library(ComplexHeatmap)
+library(tidyr)
+library(colorRamp2)
+library(readxl)
+library(scCustomize)
+library(reshape2)
+library(knitr)
+library(tibble)
+library(SingleCellExperiment)
+library(viridis)
+library(ggplotify)
+library(lme4)
+library(muscatWrapper)
+library(writexl)
+library(ggpubr)
+library(kableExtra)
+library(SeuratData)
+library(limma)
+library(scales)
+# SET SEED FOR REPRODUCIBILITY
+set.seed(123)
+```
+Read the rds file
+```{r}
+pbmc.UT <- readRDS("/home/inf-21-2023/thesis/scRNAseq_data_oelen/pbmc_UT_v2_sexannotated.rds")
+all.genes <- rownames(pbmc.UT)
+```
+Define the sex hormone receptor genes and filter the available genes from the object
+```{r}
+receptor_genes <- c("^ESR1$", "^ESR2$", "^PGR$","^NR3C3$","^PR$", "^AR$", "^GPER", "^LGR1","^FSHRO","^ODG1", "^FSHR", "^LHR", "^LCGR",
+"^LGR2", "^ULG5", "^LHRH","^LHRHR","LSH-R","HHG", "^GNRHR","^GRHR", "^LHRHR", "^GRH$", "^LHCGR" ,"^HHG", "^LCGR", "^LGR2", "LHR", "^ULG5", "^ODG4", "^FSH Receptor", "P23945-1", "P23945", "LH/CG-R","LSH-R","HHG", "ULG5", "LGR2", "LCGR" )
+
+filtered_genes <- grep(paste(receptor_genes,  collapse = "|"), all.genes, value = TRUE)
+
+cell_subtypes_order <- c(
+  # T Cells (CD4 and CD8 T Cells)
+  "CD4 Naive T", "Central memory CD4T", "Effector memory CD4T",
+  "Naive CD8T", "Effector memory CD8T",
+  # NK Cells
+  "NK dim", "NK bright", "NK Proliferating",
+  # Monocytes
+  "CD14+ Monocytes", "CD14+ Proinflammatory Monocytes",
+  "CD16+ Monocytes", "CD16+ Monocytes ISG",
+  # B Cells
+  "B cells", "Plasma B cells",
+  # Dendritic Cells
+  "cDCs", "pDCs",
+  #
+  "HSPCs", "Megakaryocytes"
+)
+
+receptors_order <- c("ESR1", "ESR2", "GPER1", "AR")
+```
+Assign the receptor expression status to positive if the expression is > 0 or negative if expression is < 0
+```{r}
+# Fetch the expression matrix
+expr_matrix <- GetAssayData(pbmc.UT, assay = "RNA", layer = "data")
+
+# For each receptor, assign status per cell
+for (receptor in receptors_order) {
+  if (receptor %in% rownames(expr_matrix)) {
+    expr_values <- expr_matrix[receptor, ]
+    pbmc.UT[[paste0(receptor, "_status")]] <- ifelse(expr_values > 0, "Positive", "Negative")
+  } else {
+    pbmc.UT[[paste0(receptor, "_status")]] <- NA
+  }
+}
+pbmc.UT <- subset(pbmc.UT, subset = Predicted_sex == "F")
+
+```
+
+
+```{r}
+# Annotate the cell types by receotor expression positive or negative
+expr_data <- FetchData(pbmc.UT, vars = c("subject", filtered_genes), layer = "data")
+expr_data$cell_type <- pbmc.UT$cluster_names[match(colnames(pbmc.UT), rownames(expr_data))]
+
+
+# Convert the matrix to long format
+expr_long <- melt(expr_data, id.vars = c("cell_type", "subject"),
+                   variable.name = "gene", value.name = "expression")
+
+# If raw counts are to be visualised just use Count = sum(expression > 0)
+expr_long <- expr_long %>%
+  group_by(cell_type, subject, gene) %>%
+  mutate(percent_expression = sum(expression > 0) / n() * 100) %>%
+  ungroup()
+
+violin_plot_combined <- ggplot(expr_long, aes(x = factor(gene, levels = receptors_order), y = percent_expression, fill = gene)) +
+  geom_violin(trim = TRUE) +  # Violin plot for Male and Female
+  geom_point() +
+# geom_jitter(width = 0.1, height = 0, alpha = 0.5) +
+  stat_summary(fun = median, geom = "point", shape = 23, size = 3, fill = "white") +  # Add median markers
+  facet_wrap(~ cell_type, scales = "free_y") +  # Facet by cell type
+  labs(x = "Sex hormone receptor", y = "Percent of cells", title = "Percentage of cells expressing the receptors") +
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1, size = 20),
+    axis.text.y = element_text(size = 20),
+    axis.title.x = element_text(size = 25),
+    axis.title.y = element_text(size = 25),
+    plot.title = element_text(size = 30, face = "bold"),
+    strip.text = element_text(size = 30, face = "bold")
+  ) +
+    scale_y_continuous(expand = expansion(mult = c(0, 0.2)), limits = c(0,NA))+
+        theme_classic2()
+png("/home/inf-21-2023/thesis/scRNAseq_data_oelen/receptor_expression_levels.png", width = 4000, height = 2500, res = 300)
+violin_plot_combined
+dev.off()
+#ggsave("/home/inf-21-2023/thesis/scRNAseq_data_oelen/receptor_expression_levels.png", violin_plot_combined, width = 20, height = 15)
+
+```
+
+```
+```{r}
+#saveRDS(pbmc.UT, file = "/home/inf-21-2023/thesis/scRNAseq_data_oelen/pbmc_UT_receptor.rds")
+```
+```{r}
+library(report)
+cite_packages()
+```
+```{r}
+sessionInfo()
+
+```

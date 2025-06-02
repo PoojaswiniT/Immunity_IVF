@@ -1,0 +1,141 @@
+---
+title: "scRNAseq PBMC Oelen GSEA analysis"
+Author: "Pooja"
+date: "2025"
+output:
+  html_document
+---
+```{r setup, include=FALSE}
+knitr::opts_knit$set(root.dir = "/home/inf-21-2023/thesis/scRNAseq_data_oelen")
+knitr::opts_chunk$set(echo = TRUE,
+                      eval = TRUE,
+                      message = FALSE,
+                      warning = FALSE)
+options(max.print=200)
+set.seed(1919)
+```
+GENE SET ENRICHMENT ANALYSIS IN HEALTHY FEMALE PBMCs
+
+This script uses the pbmc dataset from the Oelen et al 2022 paper which has been analysed and annotated in the previous script - V2_pbmc.rmd, sex hormone analysis, and the gene lists generated from the DESeq2 analysis of all the sex hormone positive vs negative cells.
+The script follows the GSEA analysis of all the sex hormone receptor positive vs negative cells, and the results are visualised using dotplots and upset plots.
+
+The BTM database is used for the GSEA analysis, and the results are filtered for significant p-values (p.adjust < 0.05).
+The tsv file containing the BTM database is taken from the lab.
+```{r}
+library(clusterProfiler)
+library(org.Hs.eg.db)
+library(msigdbr)
+library(enrichplot)
+library(UpSetR)
+library(Seurat)
+library(dplyr)
+library(tidyr)
+library(msigdbr)
+library(patchwork)
+library(ggupset)
+library(readr)
+library(ggtangle)
+```
+```{r}
+BTM_plus <- read_tsv("/home/inf-21-2023/thesis/scRNAseq_data_oelen/BTM_plus_hs_t2g.tsv")
+
+btm_db <- BTM_plus %>%
+  gather(key = "term", value = "gene") %>%
+  filter(!is.na(gene))
+```
+```{r}
+receptors <- c("ESR1", "ESR2", "GPER1", "AR")
+result_path <- "/home/inf-21-2023/thesis/scRNAseq_data_oelen/DE_results/"
+result_df <- data.frame()
+
+for (receptor in receptors) {
+  csv_files <- list.files(result_path, pattern = paste0("_", receptor, "_DESeq2.csv$"), full.names = TRUE)
+
+  for (file in csv_files) {
+    cluster <- sub(paste0("_", receptor, "_DESeq2.csv"), "", basename(file))
+    de_result <- read.csv(file, row.names = 1)
+    message("Running GSEA for: ", cluster, " for receptor: ", receptor)
+
+    if (!"avg_log2FC" %in% colnames(de_result)) next
+
+    # Count upregulated and downregulated
+    gene <- rownames(de_result)
+    avglog2fc <- de_result$avg_log2FC
+    p_val_adj <- de_result$p_val_adj
+    p_val <- de_result$p_val
+
+    result_df <- rbind(result_df, data.frame(cluster = cluster, receptor = receptor, gene = gene, log2fc = avglog2fc, p_val_adj = p_val_adj, p_val = p_val))
+  }
+    cell_types <- unique(result_df$cluster)
+
+    make_gene_list <- function (cell_type) {
+    d <- result_df %>%
+        filter(cluster == !!cell_type) %>%
+        dplyr::select(gene, log2fc) #ranked based on logfc
+
+    d <- d[!duplicated(d$gene), ]
+
+      geneList <- d$log2fc
+      names(geneList) <- as.character(d$gene)
+      geneList <- sort(geneList, decreasing = TRUE)
+      return(geneList)
+    }
+
+    cluster_list <- lapply(cell_types, make_gene_list)
+    names(cluster_list) <- cell_types
+    gsea_btm <- compareCluster(cluster_list,
+                            fun = "GSEA",
+                            TERM2GENE = btm_db,
+                            pvalueCutoff= 0.05,
+                            pAdjustMethod = "BH",
+                            nPermSimple = 1000000,
+                            verbose = FALSE)
+  dotplot_clusters <- gsea_btm  %>%
+  filter(p.adjust < 0.05) %>%
+  arrange(desc(NES)) %>%
+  dotplot(color = "NES",
+          size = "setSize",
+          showCategory = 4,
+          font.size = 10,
+          label_format = 100)  +
+  labs(x = NULL) +
+  scale_fill_gradient2(low = "#0050A0",high = "#C64700", midpoint = 0, mid = "white",
+							  limits = c(-max(abs(gsea_btm@compareClusterResult$NES)), max(abs(gsea_btm@compareClusterResult$NES))),
+							  breaks = c(max(abs(gsea_btm@compareClusterResult$NES)),-max(abs(gsea_btm@compareClusterResult$NES))),
+                              labels = c(paste0("Enriched in ", receptor, " positive"), paste0("Enriched in ", receptor, " negative")))+
+                              theme(axis.text.x = element_text(angle = 45, hjust = 1, size = 14, face = "bold"),
+							        axis.text.y = element_text(size = 18, face = "bold"),
+							        axis.title.x = element_text(size = 18, face = "bold"),
+							        axis.title.y = element_text(size = 18, face = "bold"),
+                                    legend.text = element_text(size = 14),
+                                    legend.title = element_text(size = 16, face = "bold"))
+
+ggsave(paste0("/home/inf-21-2023/thesis/scRNAseq_data_oelen/dotplot_btm_", receptor, ".png"), plot = dotplot_clusters)
+
+  df <- filter(gsea_btm@compareClusterResult, p.adjust < 0.05)
+  df_list <- split(df, df$Cluster)
+
+  new_df_list <- list()
+
+  for (i in seq_along(df_list)) {
+    cluster_name <- names(df_list)[i]
+    cluster_data <- df_list[[i]]
+    new_df_list[[cluster_name]] <- cluster_data[["Description"]]
+  }
+
+    if (length(new_df_list) > 1) {
+    upset <- upset(fromList(new_df_list), nsets = length(new_df_list), order.by = "freq", text.scale = 2.3)
+    ggsave(paste0("/home/inf-21-2023/thesis/scRNAseq_data_oelen/upset_plot_", receptor, ".png"), ggplotify::as.ggplot(upset))
+    }
+  }
+}
+```
+
+```{r}
+library(report)
+cite_packages()
+```
+```{r}
+sessionInfo()
+
+```
