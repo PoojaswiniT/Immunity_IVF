@@ -1,0 +1,1942 @@
+---
+title: "cytokine_data_analysis"
+author: "Pooja"
+date: "2024-09-16"
+output:
+  html_document: default
+  pdf_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+The dataset used in the script was requested from the authors of Nenonen et al 2024.
+The script follows the analysis of immune profiles in patients undergoing IVF. The dataset includes cytokine measurements for two groups: control and RIF patients. The scripts aims to analyse and visualise the immune pattern differences in the serum, and follicular fluid of the two groups of women.
+
+```{r Load Libraries, message=FALSE, warning=FALSE}
+library(data.table)
+library(knitr)
+library(readxl)
+library(dplyr)
+library(tidyr)
+library(tidyselect)
+library(tidyverse)
+library(ggplot2)
+library(ggpubr)
+library(purrr)
+library(FactoMineR)
+library(factoextra)
+library(Hmisc)
+library(plotly)
+library(ggfortify)
+library(patchwork)
+library(plyr)
+library(table1)
+library(ggh4x)
+library(ggrepel)
+library(gridExtra)
+library(grid)
+library(patchwork)
+library(ComplexHeatmap)
+library(colorRamp2)
+require(dendextend)
+require(installr)
+require(colorspace)
+library(ggridges)
+library(corrplot)
+library(viridis)
+library(circlize)
+library(tidyHeatmap)
+library(tidyheatmaps)
+library(caret)
+library(pROC)
+library(randomForest)
+library(missForest)
+library(mice)
+library(cocor)
+library(MLmetrics)
+
+set.seed(123)
+```
+
+Read the data file
+```{r Get the meta data}
+# Load the cytokine measures
+cytokine_data <- read_excel("/Users/pooja/Documents/Thesis/cytokine_data/Data/Nenonen2024data_clean.xlsx")
+
+cytokine_data <- cytokine_data %>%
+  mutate(SampleID = gsub(" ", "", SampleID))# One sample ID had a space in between K and no. so rename that
+
+# Since there are technical replicates, average the values
+cytokine_avg <- cytokine_data %>%
+  group_by(SampleID, Group) %>%
+  dplyr::summarise(across(everything(), ~ mean(.x, na.rm = TRUE)))
+
+# Store the data frame in a another variable to use in the table
+df <- cytokine_avg
+```
+
+Make a table to summarise the dataset
+```{r Table1}
+df$Group <- factor(df$Group, labels=c("Control", "RIF"))
+
+# Define the labels for the table
+label(df$Serum_IFNg) <- "Serum_IFNg"
+label(df$FF_IFNg) <- "FF_IFNg"
+label(df$Serum_TNFa) <- "Serum_TNFa"
+label(df$FF_TNFa) <- "FF_TNFa"
+label(df$Serum_IL13) <- "Serum_IL13"
+label(df$FF_IL13) <- "FF_IL13"
+label(df$Serum_IL12p70) <- "Serum_IL12p70"
+label(df$FF_IL12p70) <- "FF_IL12p70"
+label(df$Serum_IL10) <- "Serum_IL10"
+label(df$FF_IL10) <- "FF_IL10"
+label(df$Serum_IL8) <-"Serum_IL8"
+label(df$FF_IL8) <- "FF_IL8"
+label(df$Serum_IL6) <- "Serum_IL6"
+label(df$FF_IL6) <- "FF_IL6"
+label(df$Serum_IL4) <- "Serum_IL4"
+label(df$FF_IL4) <- "FF_IL4"
+label(df$Serum_IL2) <- "Serum_IL2"
+label(df$FF_IL2) <- "FF_IL2"
+label(df$Serum_IL1b) <- "Serum_IL1b"
+label(df$FF_IL1b) <- "FF_IL1b"
+
+# Add the sample count and summarize
+table1(~ Serum_IFNg + FF_IFNg + Serum_TNFa + FF_TNFa + Serum_IL13 + FF_IL13 + Serum_IL12p70 + FF_IL12p70 +
+Serum_IL10 + FF_IL10 + Serum_IL8 + FF_IL8 + Serum_IL8 + FF_IL8 + Serum_IL6 + FF_IL6 + Serum_IL4 + FF_IL4 + Serum_IL2 + FF_IL2 + Serum_IL1b +FF_IL1b| Group, data=df)
+```
+
+Perform PCA without averaging the values, to check is they cluster well
+```{r fig.width = 8, fig.show= "hold", out.width= "50%", fig.keep='none'}
+# PCA analysis with technical replicates
+
+df_na <- na.omit(cytokine_data) # Remove NAs
+
+pca_result <- prcomp(df_na[,-(1:2)], center = TRUE, scale = TRUE)
+#summary(pca_result)
+
+# Plot the PCA
+
+# factoextra
+fviz_pca_ind(pca_result,
+             geom.ind = "point",
+             col.ind = df_na$Group,
+             palette = c("#00AFBB", "#E7B800"),
+             addEllipses = TRUE, label = "none",
+             title = "PCA - Cytokine Data",
+             legend.title = "Group")
+
+# Create the biplot with arrows for variables
+fviz_pca_var(pca_result, repel = TRUE)
+```
+
+
+```{r fig.width = 8, fig.show= "hold", out.width= "50%", fig.keep='none'}
+# Perform PCA for serum samples and FF samples individually
+# Serum
+serum_data <- df_na %>%
+  select(starts_with("Serum")) %>%
+  bind_cols(df_na %>% select(SampleID, Group)) %>%
+  drop_na()
+pca_res_serum <- prcomp(serum_data[,-(11:12)], center = TRUE, scale = TRUE)
+
+# PLot PCA
+fviz_pca_ind(pca_res_serum,
+              geom.ind = "point",
+              col.ind = serum_data$Group,
+              addEllipses = TRUE,
+              legend.title = "Group") +
+  labs(title = "PCA of Serum Samples by Group") +
+  theme_minimal()
+
+# Biplot
+fviz_pca_var(pca_res_serum, repel = TRUE)
+```
+
+
+```{r fig.width = 8, fig.show= "hold", out.width= "50%", fig.keep='none'}
+# FF
+ff_data <- df_na %>%
+  select(starts_with("FF")) %>%
+  bind_cols(df_na %>% select(SampleID, Group)) %>%
+  drop_na()
+pca_res_ff <- prcomp(ff_data[,-(11:12)], center = TRUE, scale = TRUE)
+
+# PLot PCA
+fviz_pca_ind(pca_res_ff,
+              geom.ind = "point",
+              col.ind = ff_data$Group,
+              addEllipses = TRUE,
+              legend.title = "Group") +
+  labs(title = "PCA of FF Samples by Group") +
+  theme_minimal()
+
+# Biplot
+fviz_pca_var(pca_res_ff, repel = TRUE)
+```
+
+```{r Variance explained, echo= FALSE, fig.keep= "none"}
+# If you want to visualise the variance explained by the PCA
+# Plot the variance explained by each PC
+fviz_eig(pca_result, addlabels = TRUE, ylim = c(0, 50))
+fviz_eig(pca_res_serum, addlabels = TRUE, ylim = c(0, 50))
+fviz_eig(pca_res_ff, addlabels = TRUE, ylim = c(0, 50))
+
+```
+
+Average the values and perform PCA
+
+```{r}
+cytokine_avg <- na.omit(cytokine_avg)
+
+serum_data <- cytokine_avg %>%
+  group_by(Group) %>%
+  select(starts_with("Serum"))
+
+ff_data <- cytokine_avg %>%
+    group_by(Group) %>%
+  select(starts_with("FF"))
+```
+
+
+```{r}
+# Perform PCA on the averaged data
+options(ggrepel.max.overlaps = Inf)
+
+
+pca_result <- prcomp(cytokine_avg[,-(1:2)], center = TRUE, scale = TRUE)
+
+#summary(pca_result)
+pca_res_serum <- prcomp(serum_data[,-(1)], center = TRUE, scale = TRUE)
+#summary(pca_res_serum)
+pca_res_ff <- prcomp(ff_data[,-(1)], center = TRUE, scale = TRUE)
+#summary(pca_res_ff)
+
+# PLot PCA
+a_plot <- autoplot(pca_result, data = cytokine_avg, colour = 'Group') +
+  scale_color_manual(values = c("#595959", "#eb4fb2")) + 
+  theme_classic(base_size = 16) +  # base font size for all elements
+  theme(
+    plot.title = element_text(size = 20, face = "bold", hjust = 0.5),
+    axis.title = element_text(size = 18),
+    axis.text = element_text(size = 14),
+    legend.text = element_text(size = 14),
+    legend.title = element_text(size = 16)
+  ) +
+  labs(title = "PCA") +
+  geom_text_repel(aes(label = SampleID), size = 5)  # increased label size
+
+a_plot
+
+# Save the plot
+ggsave(a_plot, file = "/Users/pooja/Documents/Thesis/cytokine_data/results for lab day/PCA_plot.jpeg", width = 10, height = 10)
+```
+
+```{r, fig.width = 8, fig.show= "hold", out.width= "50%"}
+fviz_pca_ind(pca_result,
+              geom.ind = "point",
+              col.ind = cytokine_avg$Group,
+              label= "SampleID", 
+              #habillage=df_avg$Group,
+              addEllipses = TRUE,
+              legend.title = "Group") +
+  #scale_color_manual(values = c("Purple", "Orange")) +
+  labs(title = "PCA of all Samples by Group") +
+    theme(
+    plot.title = element_text(size = 20, face = "bold", hjust = 0.5),
+    axis.title = element_text(size = 18),
+    axis.text = element_text(size = 14),
+    legend.text = element_text(size = 14),
+    legend.title = element_text(size = 16)
+  ) +
+  theme_classic()
+
+var_plot <- fviz_pca_var(pca_result, col.var = "contrib", repel = TRUE, labelsize=2,
+                         select.var = list(contrib = 25)) + theme_classic()+  theme(
+    plot.title = element_text(size = 20, face = "bold", hjust = 0.5),
+    axis.title = element_text(size = 18),
+    axis.text = element_text(size = 14),
+    legend.text = element_text(size = 14),
+    legend.title = element_text(size = 16)
+  ) 
+var_plot
+
+ggsave(var_plot, file = "/Users/pooja/Documents/Thesis/cytokine_data/results for lab day/var_plot.jpeg", width = 10, height = 10)
+```
+
+
+```{r, fig.width = 8, fig.show= "hold", out.width= "50%"}
+# loadings for PC
+var_plot <- as.data.frame(var_plot$data)
+
+var_plot <- var_plot[order(var_plot$x, decreasing = T),]
+
+var_plot$name <- factor(var_plot$name, levels = var_plot$name)
+
+contrib <- ggplot(var_plot, aes(x=name, y=x)) +
+  geom_segment( aes(x=name, xend=name, y=0, yend=x), color="grey") +
+  geom_point( color="#A5AA99", size=4) +
+  theme_classic() +
+  theme(
+    panel.grid.major.x = element_blank(),
+    panel.border = element_blank(),
+    axis.ticks.x = element_blank(),
+    axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1),
+    plot.title = element_text(size = 20, face = "bold", hjust = 0.5),
+    axis.title = element_text(size = 18),
+    axis.text = element_text(size = 14),
+    legend.text = element_text(size = 14),
+    legend.title = element_text(size = 16)) +
+  xlab("") +
+  ylab("Contribution to PC1")+ coord_flip()
+
+ggsave(contrib, file = "/Users/pooja/Documents/Thesis/cytokine_data/results for lab day/contrib_plot.jpeg", width = 10, height = 10)
+
+```
+
+```{r, eval = FALSE, echo=FALSE, results='hide', fig.keep='none'}
+pdf(file = "PCA_plots.pdf", width = 10, height = 10)
+
+# Arrange and plot both a_plot and var_plot in the PDF
+a_plot + var_plot  
+# Close the PDF device
+dev.off()
+```
+
+Plot PCA for serum and follicular fluid separately
+
+```{r, fig.width = 8, fig.show= "hold", out.width= "50%"}
+a_plot <- autoplot(pca_res_serum, data = cytokine_avg, colour = 'Group') +
+  scale_color_manual(values = c("#595959", "#eb4fb2")) + 
+  theme_classic() +
+  labs(title = "PCA for Serum")+
+  geom_text_repel(aes(label = SampleID), size = 5)+
+    theme(
+    plot.title = element_text(size = 20, face = "bold", hjust = 0.5),
+    axis.title = element_text(size = 18),
+    axis.text = element_text(size = 14),
+    legend.text = element_text(size = 14),
+    legend.title = element_text(size = 16)
+  ) 
+a_plot
+
+
+ggsave(a_plot, file = "/Users/pooja/Documents/Thesis/cytokine_data/results for lab day/serum_pca_plot.jpeg", width = 10, height = 10)
+
+
+fviz_pca_ind(pca_res_serum,
+              geom.ind = "point",
+              col.ind = serum_data$Group,
+              addEllipses = TRUE,
+              legend.title = "Group") +
+  labs(title = "PCA of Serum Samples by Group") +
+  theme_minimal()
+
+fviz_pca_var(pca_res_serum, repel = TRUE)
+```
+
+
+```{r, fig.width = 8, fig.show= "hold", out.width= "50%"}
+#autoplot(pca_res_ff, data = ff_data, colour = 'Group')
+a_plot <- autoplot(pca_res_ff, data = cytokine_avg, colour = 'Group') +
+  scale_color_manual(values = c("#595959", "#eb4fb2")) + 
+  theme_classic() +
+  labs(title = "PCA for Folicular fluid")+
+  geom_text_repel(aes(label = SampleID), size = 5)+
+  theme(
+    plot.title = element_text(size = 20, face = "bold", hjust = 0.5),
+    axis.title = element_text(size = 18),
+    axis.text = element_text(size = 14),
+    legend.text = element_text(size = 14),
+    legend.title = element_text(size = 16)
+  ) 
+a_plot
+
+ggsave(a_plot, file = "/Users/pooja/Documents/Thesis/cytokine_data/results for lab day/ff_pca_plot.jpeg", width = 10, height = 10)
+
+fviz_pca_ind(pca_res_ff,
+              geom.ind = "point",
+              col.ind = ff_data$Group,
+              addEllipses = TRUE,
+              legend.title = "Group") +
+  labs(title = "PCA of FF Samples by Group") +
+  theme_minimal()
+
+fviz_pca_var(pca_res_ff, repel = TRUE)
+```
+
+Heatmap 
+```{r}
+
+# scale and center the measurements before generating a heatmap
+cytokine_scaled <- cytokine_avg %>%
+  dplyr::group_by(SampleID, Group) %>%
+  dplyr::summarise(
+    across(where(is.numeric), ~ mean(.x,, na.rm = TRUE)),
+    .groups = 'drop') %>%
+  dplyr::mutate(
+    across(where(is.numeric), ~ scale(.x, center = TRUE, scale = TRUE)[, 1])
+  )
+
+
+#df_ordered <- df_group %>%
+#  arrange(factor(Group, levels = c("Ctrl", "RIF")),
+#          factor(SampleID, levels = setdiff(SampleID, c(285, 24, 495, 46))),
+#          factor(SampleID, levels = c(285, 24, 495, 46)))
+
+# looking at proteins that showed most variance in the PCA
+data_matrix <- as.matrix(cytokine_scaled[, c("SampleID", "FF_IL12p70", "FF_IL4", "FF_TNFa", "Serum_TNFa", "Serum_IL13", "Serum_IL6", "Serum_IL8")])
+
+#data_matrix <- as.matrix(df_ordered)
+rownames(data_matrix) <- data_matrix[, "SampleID"]
+
+data_matrix <- data_matrix[, -(1)] # for everything change to 1:2
+
+data_matrix <- t(data_matrix)
+
+og_rownames <- rownames(data_matrix)
+
+data_matrix_numeric <- as.matrix(data_matrix)  
+data_matrix_numeric <- apply(data_matrix_numeric, 2, as.numeric)
+
+# 3. Set the original row names back
+rownames(data_matrix_numeric) <- og_rownames
+
+color_function <- colorRamp2(c(min(data_matrix_numeric),0, max(data_matrix_numeric)),
+                             c("blue","white","red"))
+# the colour gradient can include outliers even after scaling, so you can limit the gradient manually if needed
+#color_function <- colorRamp2(c(-2, 0, 2), c("blue", "white", "red"))
+
+ordered_sample_ids <- cytokine_scaled$SampleID
+```
+Without clustering
+```{r, fig.height=2, fig.width=6}
+wo_clust <- Heatmap(data_matrix_numeric,
+        name = "Value",
+        cluster_rows = FALSE,
+        cluster_columns = FALSE,
+        show_row_names = TRUE,
+        show_column_names = TRUE,
+        row_title = "Proteins",
+        column_title = "Samples",
+        column_order = match(ordered_sample_ids, colnames(data_matrix)),
+        col = color_function,
+        column_names_gp = gpar(fontsize = 6), 
+        row_names_gp = gpar(fontsize = 6)) 
+        #width = unit(4, "in"),   
+        #height = unit(1, "in"))
+wo_clust
+```
+
+With HC clustering
+```{r, fig.height=6, fig.width=10}
+
+# calculate the distance matrix using hierarchical clustering
+dist_matrix_cols <- dist(t(data_matrix_numeric), method = "euclidean")
+
+hc_cols <- hclust(dist_matrix_cols, method = "ward.D2")
+
+color_group_list <- c("Ctrl" = "#595959", "RIF" = "#eb4fb2")
+
+group_levels <- factor(cytokine_scaled$Group, levels = names(color_group_list))
+
+transposed_data_matrix <- t(data_matrix_numeric)
+
+hc_heatmap <- Heatmap(data_matrix_numeric,
+        name = "Value",
+        cluster_rows = FALSE,   
+        cluster_columns = TRUE,  
+        column_split = 4,  
+        show_row_names = TRUE,
+        show_column_names = TRUE,
+        row_title = "Samples",  
+        column_title = "Proteins",  
+        column_order = hc_cols$order,  
+        col = color_function,
+        column_names_gp = gpar(fontsize = 6),
+        row_names_gp = gpar(fontsize = 6),
+        column_labels = colnames(data_matrix_numeric), 
+        width = unit(3, "in"),  
+        height = unit(4, "in"),   
+        top_annotation = columnAnnotation(
+  Group = group_levels, 
+  col = list(Group = color_group_list)
+)) 
+
+hc_heatmap
+
+```
+
+
+
+```{r, echo=FALSE, results='hide', fig.keep='none'}
+pdf(file = "Heatmap_plot.pdf", width = 10, height = 10)
+wo_clust
+dev.off()
+```
+
+```{r, echo=FALSE, results='hide', fig.keep='none'}
+pdf(file = "H_clust_heatmap.pdf", width = 10, height = 10)
+hc_heatmap
+dev.off()
+```
+
+For all proteins
+```{r}
+data_matrix <- as.matrix(cytokine_scaled)
+
+rownames(data_matrix) <- data_matrix[, "SampleID"]
+
+data_matrix <- data_matrix[, -(1:2)]
+
+data_matrix <- t(data_matrix)
+
+og_rownames <- rownames(data_matrix)
+
+data_matrix_numeric <- as.matrix(data_matrix)  
+data_matrix_numeric <- apply(data_matrix_numeric, 2, as.numeric)
+
+# 3. Set the original row names back
+rownames(data_matrix_numeric) <- og_rownames
+
+#color_function <- colorRamp2(c(min(data_matrix_numeric),0, max(data_matrix_numeric)),
+#                             c("blue","white","red"))
+
+ordered_sample_ids <- cytokine_scaled$SampleID
+
+dist_matrix_cols <- dist(t(data_matrix_numeric), method = "euclidean")
+
+hc_cols <- hclust(dist_matrix_cols, method = "ward.D2")
+
+dist_matrix_rows <- dist(data_matrix_numeric, method = "euclidean")  # Distance for rows
+
+hc_rows <- hclust(dist_matrix_rows, method = "ward.D2")  # Hierarchical clustering on rows
+
+color_group_list <- c("Ctrl" = "#595959", "RIF" = "#eb4fb2")
+
+group_levels <- factor(cytokine_scaled$Group, levels = names(color_group_list))
+
+column_anno <- HeatmapAnnotation(
+  Group = group_levels, 
+  col = list(Group = color_group_list)
+)
+
+
+transposed_data_matrix <- t(data_matrix_numeric)
+
+color_function <- colorRamp2(c(-2, 0, 2), c("blue", "white", "red"))
+
+hc_heatmap <- Heatmap(transposed_data_matrix,
+        name = "Value",
+        cluster_rows = TRUE,   
+        cluster_columns = TRUE,  
+        row_split = 4, 
+        column_split = 4,
+        show_row_names = TRUE,
+        show_column_names = TRUE,
+        row_title = "Samples",  
+        column_title = "Proteins",  
+        row_order = hc_cols$order,  
+        column_order = hc_rows$order,
+        col = color_function,
+        column_names_gp = gpar(fontsize = 6),
+        row_names_gp = gpar(fontsize = 6),
+        column_labels = colnames(transposed_data_matrix), 
+        width = unit(3, "in"),  
+        height = unit(4, "in"),   
+        left_annotation = rowAnnotation(
+  Group = group_levels, 
+  col = list(Group = color_group_list)
+))
+
+hc_heatmap
+png("/Users/pooja/Documents/Thesis/cytokine_data/results for lab day/heatmap_plot.png", width =5800, height = 3000)
+draw(hc_heatmap)
+dev.off()
+
+pdf("/Users/pooja/Documents/Thesis/cytokine_data/results for lab day/heatmap_plot.pdf", width = 10, height = 10)
+draw(hc_heatmap)
+dev.off()
+```
+Looking at the distribution of the scaled data
+```{r}
+boxplot(data_matrix_numeric, las = 2, col = "lightblue",
+        main = "Boxplot of Scaled Cytokine Data",
+        ylab = "Scaled Expression Levels", outline = TRUE,
+        xaxt = "n")  # Hide the default x-axis labels
+
+# Then, add the custom x-axis labels
+axis(1, at = 1:ncol(data_matrix_numeric), 
+     labels = colnames(data_matrix_numeric), 
+     las = 2, cex.axis = 0.6)
+```
+To visually see the differences between RIF and control
+```{r}
+# Ensure sample order follows the Group (Ctrl first, then RIF)
+ordered_indices <- order(cytokine_scaled$Group) 
+ordered_sample_ids <- cytokine_scaled$SampleID[ordered_indices]
+
+# Reorder rows based on Ctrl first, then RIF
+data_matrix_numeric <- data_matrix_numeric[, ordered_sample_ids]
+
+# Ensure columns are ordered Serum_ first, then FF_
+#serum_ff_order <- order(grepl("^Serum_", colnames(data_matrix_numeric)), decreasing = TRUE)
+#data_matrix_numeric <- data_matrix_numeric[, serum_ff_order]
+
+# Define row and column split factors
+column_split_factor <- factor(ifelse(grepl("^Serum_", colnames(data_matrix_numeric)), "Serum", "FF"), levels = c("Serum", "FF"))
+row_split_factor <- factor(cytokine_scaled$Group[ordered_indices], levels = c("Ctrl", "RIF"))
+
+
+# Heatmap with reordered samples
+hc_heatmap <- Heatmap(t(data_matrix_numeric),
+        name = "Value",
+        cluster_rows = FALSE,  # Disable row clustering to maintain grouping
+        cluster_columns = FALSE,  # Disable column clustering to maintain Serum/FF order
+        row_split = row_split_factor,  
+        #column_split = column_split_factor,  
+        show_row_names = TRUE,
+        show_column_names = TRUE,
+        row_title = "Samples",  
+        column_title = "Proteins",  
+        row_order = ordered_indices,  # Ensure Ctrl first, then RIF
+        col = color_function,
+        column_names_gp = gpar(fontsize = 6),
+        row_names_gp = gpar(fontsize = 6),
+        column_labels = colnames(t(data_matrix_numeric)), 
+        width = unit(3, "in"),  
+        height = unit(4, "in"),   
+        left_annotation = rowAnnotation(
+  Group = row_split_factor, 
+  col = list(Group = color_group_list)
+))
+```
+
+```{r}
+pdf(file = "H_clust_heatmap_all_proteins_limited_range.pdf", width = 10, height = 10)
+hc_heatmap
+dev.off()
+```
+
+K means clustering
+```{r}
+
+km.out <- kmeans(pca_result$x, centers = 4, nstart = 20)
+
+cytokine_avg$cluster_id <- factor(km.out$cluster)
+cytokine_avg$PC1 <- pca_result$x[, 1] 
+cytokine_avg$PC2 <- pca_result$x[, 2]  
+
+# Add cluster IDs to the dataframe as a factor
+cytokine_avg$cluster_id <- factor(km.out$cluster)
+
+# Create a scatter plot of the PCA results colored by cluster
+ggplot(cytokine_avg, aes(x = PC1, y = PC2, color = cluster_id)) +
+    geom_point(alpha = 1) +
+    xlab("PC1") +
+    ylab("PC2") +
+    ggtitle("K-means Clustering") +
+    theme_minimal() + 
+  geom_text_repel(aes(label = SampleID), size = 3)
+
+#fviz_pca_var(pca_result, col.var = "cos2", gradient.cols = c("#00AFBB", "#E7B800", #"#FC4E07"), repel = TRUE)
+
+k_plot <- Heatmap(data_matrix_numeric,
+        name = "Value",
+        cluster_rows = FALSE,
+        cluster_columns = TRUE,
+        column_km = 4,
+        show_row_names = TRUE,
+        show_column_names = TRUE,
+        row_title = "Proteins",
+        column_title = "Samples",
+        column_order = match(ordered_sample_ids, colnames(data_matrix)),
+        col = color_function,
+        column_names_gp = gpar(fontsize = 8))
+k_plot
+```
+
+```{r, echo=FALSE, results='hide', fig.keep='none'}
+pdf(file = "k_means_plots.pdf", width = 10, height = 10)
+
+# Arrange and plot both a_plot and var_plot in the PDF
+k_plot
+
+# Close the PDF device
+dev.off()
+```
+
+
+Visualise the correlation between serum and FF in Control and RIF
+```{r, fig.height=30, fig.width=20, warning=FALSE}
+
+cytokine_data_indiv <- cytokine_avg %>%
+  group_by(SampleID, Group) %>%
+  pivot_longer(cols = starts_with("Serum_"), names_to = "Protein_Serum", values_to = "Serum_value") %>%
+  pivot_longer(cols = starts_with("FF_"), names_to = "Protein_FF", values_to = "FF_value") %>%
+  filter(substr(Protein_Serum, 6, 15) == substr(Protein_FF, 3, 15)) %>%
+  mutate(Protein = ifelse(substr(Protein_Serum, 6, 15) == substr(Protein_FF, 3,   15), substr(Protein_Serum, 7, 15), NA))
+
+cytokine_data_indiv <- cytokine_data_indiv %>%
+    filter(!is.na(Serum_value) & !is.na(FF_value))
+
+plots <- list()
+
+for(protein in unique(cytokine_data_indiv$Protein)){
+  
+  xy.lims <- range(cytokine_data_indiv$Serum_value[cytokine_data_indiv$Protein==protein], cytokine_data_indiv$FF_value[cytokine_data_indiv$Protein==protein])
+  
+  df_protein <- cytokine_data_indiv[cytokine_data_indiv$Protein == protein, ]
+  
+  p<- ggscatter(df_protein, x = "Serum_value", y = "FF_value", 
+   add = "reg.line",  # Add regressin line
+   color = "Group", palette = color_group_list,
+   conf.int = TRUE)+ # Add confidence interval stat_cor(aes(color = cyl), label.x = 3)
+   stat_cor(method = "spearman", aes(label = paste(..r.label.., ..p.label.., sep = "~`,`~"), color = Group))+ 
+   labs(title = protein, x = "Serum_value(ng/L)", y = "FF_value(ng/L)")+
+   xlim(xy.lims) +
+   ylim(xy.lims)+
+  coord_fixed(ratio = 1)
+  
+  plots[[protein]] <- p
+}
+
+# Use patchwork to combine the plots
+combined_plot <- wrap_plots(plots, ncol = 3, widths = 50, heights = 20) +
+  plot_layout(guides = 'collect') +  # 'guides = collect' combines the legend
+  plot_annotation(title = "Spearman Correlation Plots for Proteins") & 
+  theme(legend.position = 'left') 
+
+
+# Print the combined plot
+combined_plot
+
+```
+Correlation beteen each protein
+```{r, warning=FALSE, results='hide', fig.height=8, fig.width=10, results='hide'}
+cytokine_long_avg <- cytokine_avg %>%
+  pivot_longer(cols = starts_with("Serum_") | starts_with("FF_"),
+               names_to = c("SampleType", "Protein"),
+               names_sep = "_",
+               values_to = "Value")
+ 
+
+proteins <- c("IFNg", "TNFa", "IL1b", "IL2", "IL8", "IL12p70","IL6", "IL4", "IL10", "IL13")
+
+cytokine_long_avg$Protein <- factor(cytokine_long_avg$Protein, levels = proteins)
+
+cytokine_rif_serum <- cytokine_long_avg %>%
+  filter(Group == "RIF" & SampleType == "Serum") 
+# Filter the FF samples from RIF
+cytokine_rif_ff <- cytokine_long_avg %>%
+  filter(Group == "RIF" & SampleType == "FF") 
+# Filter the serum samples from control group
+cytokine_ctrl_serum <- cytokine_long_avg %>%
+  filter(Group == "Ctrl" & SampleType == "Serum") 
+# Filter the FF samples from control 
+cytokine_ctrl_ff <- cytokine_long_avg %>%
+  filter(Group == "Ctrl" & SampleType == "FF")
+
+# Function to create a correlation matrix and plot it
+plot_correlation_matrix <- function(data, title) {
+  
+  # Pivot data to a wide format with Protein as columns and SampleID as rows
+  data_wide <- data %>%
+    select(SampleID, Protein, Value, SampleType) %>%
+    pivot_wider(names_from = Protein, values_from = Value)
+  
+  # Calculate pairwise correlation matrix (Spearman)
+  cor_matrix <- cor(data_wide[,-c(1:2)], use = "pairwise.complete.obs", method = "spearman")
+  
+  # Initialize matrix to store p-values
+  p_value_matrix <- matrix(NA, nrow = ncol(data_wide) - 2, ncol = ncol(data_wide) - 2)
+  
+  # Calculate p-values for each pair using cor.test
+  for (i in 1:(ncol(data_wide) - 2)) {
+    for (j in i:(ncol(data_wide) - 2)) {
+      test_result <- cor.test(data_wide[[i + 2]], data_wide[[j + 2]], method = "spearman", use = "pairwise.complete.obs")
+      p_value_matrix[i, j] <- test_result$p.value
+      p_value_matrix[j, i] <- test_result$p.value  
+    }
+  }
+  
+  # Convert p_value_matrix to a numeric matrix
+  p_value_matrix <- as.matrix(p_value_matrix) 
+  
+  # Assign column and row names to the p-value matrix
+  colnames(p_value_matrix) <- colnames(data_wide)[-c(1, 2)]
+  rownames(p_value_matrix) <- colnames(data_wide)[-c(1, 2)]
+  
+  
+  # Create the correlation plot with p-values displayed
+  p <- corrplot(cor_matrix, 
+                type = "upper",
+                main = title,
+                cex.main = 1,
+                mar = c(0, 0, 2, 0),
+                p.mat = p_value_matrix,  
+                method = "circle",
+                addCoef.col = "black",   
+                tl.col = "black",       
+                col = colorRampPalette(c("blue", "white", "red"))(20),  
+                tl.srt = 0,  
+                tl.cex = 0.9,
+                insig = 'blank',
+                number.cex = 0.7)
+  
+  return(p)
+}
+```
+
+
+
+
+```{r, warning=FALSE, results='hide', fig.show='hold', out.width='50%', fig.height=8, fig.width=10, results='hide'}
+# Ctrl Serum
+plot_ctrl_serum <- plot_correlation_matrix(cytokine_ctrl_serum, "Control - Serum Correlation")
+
+# Ctrl FF
+plot_ctrl_ff <- plot_correlation_matrix(cytokine_ctrl_ff, "Control - FF Correlation")
+# RIF Serum
+plot_rif_serum <- plot_correlation_matrix(cytokine_rif_serum, "RIF - Serum Correlation")
+
+# RIF FF
+plot_rif_ff <- plot_correlation_matrix(cytokine_rif_ff, "RIF - FF Correlation")
+```
+
+Plot the data as box plots to visualise
+
+```{r, fig.keep='none',warning=FALSE, echo=FALSE, message=FALSE, fig.width=20, fig.height=25}
+
+# Arrange the dataframe by the Protein column
+cytokine_order <- cytokine_long_avg %>%
+  arrange(Protein) 
+
+cytokine_order$SampleType <- factor(cytokine_order$SampleType, levels = c("Serum", "FF"))
+cytokine_order$Group <- factor(cytokine_order$Group, levels = c("Ctrl", "RIF"))
+cytokine_order$group_condition <- paste(cytokine_order$SampleType, cytokine_order$Group, sep = "_")
+
+# Define comparison list
+comp_list <- list(
+  c("Serum_Ctrl", "FF_Ctrl"),  # Serum vs FF in Ctrl
+  c("Serum_RIF", "FF_RIF"),    # Serum vs FF in RIF
+  c("Serum_Ctrl", "Serum_RIF"),# Serum in Ctrl vs RIF
+  c("FF_Ctrl", "FF_RIF")       # FF in Ctrl vs RIF
+)
+
+# Create the plot with faceting by protein
+p <- ggplot(cytokine_order, aes(x = group_condition, y = Value, group = interaction(SampleType, Group))) +
+  geom_boxplot() +
+  geom_jitter(width = 0.2, alpha = 0.5) +
+  labs(
+    title = "Comparisons of Proteins in Serum & FF (Control vs RIF)",
+    x = "Condition", y = "Protein concentration (ng/L)"
+  ) +
+  stat_compare_means(comparisons = comp_list, method = "wilcox.test", aes(label = ..p.signif..), p.adjust.methods = "bonferroni") +
+  theme_classic() +
+  facet_wrap(~ Protein, scales = "free_y")
+
+print(p)
+
+
+```
+
+Cor heatmap
+```{r, warning=FALSE}
+
+# Create functions to extract correlation coefficient and p-value
+get_correlation <- function(data, protein, group) {
+  subset_data <- data[data$Protein == protein & data$Group == group, ]
+  cor_result <- cor.test(subset_data$Serum_value, subset_data$FF_value, 
+                        method = "spearman")
+  return(cor_result$estimate)
+}
+
+get_pvalue <- function(data, protein, group) {
+  subset_data <- data[data$Protein == protein & data$Group == group, ]
+  cor_result <- cor.test(subset_data$Serum_value, subset_data$FF_value, 
+                        method = "spearman")
+  return(cor_result$p.value)
+}
+
+# Create empty matrices to store correlations and p-values
+proteins <- unique(cytokine_data_indiv$Protein)
+correlation_matrix <- matrix(NA, nrow = length(proteins), ncol = 2)
+pvalue_matrix <- matrix(NA, nrow = length(proteins), ncol = 2)
+rownames(correlation_matrix) <- proteins
+colnames(correlation_matrix) <- c("Ctrl", "RIF")
+rownames(pvalue_matrix) <- proteins
+colnames(pvalue_matrix) <- c("Ctrl", "RIF")
+
+# Fill correlation and p-value matrices
+for(protein in proteins) {
+  correlation_matrix[protein, "Ctrl"] <- get_correlation(cytokine_data_indiv, protein, "Ctrl")
+  correlation_matrix[protein, "RIF"] <- get_correlation(cytokine_data_indiv, protein, "RIF")
+  pvalue_matrix[protein, "Ctrl"] <- get_pvalue(cytokine_data_indiv, protein, "Ctrl")
+  pvalue_matrix[protein, "RIF"] <- get_pvalue(cytokine_data_indiv, protein, "RIF")
+}
+
+# Create matrix of significance stars
+sig_matrix <- matrix("", nrow = length(proteins), ncol = 2)
+sig_matrix[pvalue_matrix < 0.05] <- "*"
+sig_matrix[pvalue_matrix < 0.01] <- "**"
+sig_matrix[pvalue_matrix < 0.001] <- "***"
+
+# Create display matrix combining correlation values and significance stars
+display_matrix <- matrix(paste0(sprintf("%.2f", correlation_matrix), sig_matrix),
+                        nrow = length(proteins), ncol = 2)
+rownames(display_matrix) <- proteins
+colnames(display_matrix) <- c("Ctrl", "RIF")
+
+
+# Define color palette from blue (negative correlation) to red (positive correlation)
+color_palette <- colorRampPalette(c("#4575B4", "white", "#D73027"))(100)
+
+# Plot heatmap with significance stars
+annotation_legend <- data.frame(
+  Significance = factor(c("p < 0.05 (*)", "p < 0.01 (**)", "p < 0.001 (***)"))
+)
+
+# Plot heatmap with significance stars
+
+cor_heatmap <- pheatmap(correlation_matrix,
+         cluster_rows = FALSE,  
+         cluster_cols = FALSE, 
+         display_numbers = display_matrix, # Use display_matrix to show stars
+         main = "Spearman Correlation Coefficients\nSerum vs FF Values",
+         fontsize_row = 8,
+         fontsize_col = 10,
+         color = color_palette,
+         annotation_legend = TRUE)
+cor_heatmap 
+
+#ggsave("/Users/pooja/Documents/Thesis/cytokine_data/result_figs/cor_heatmap1.png", cor_heatmap)
+```
+
+Calculate basic summary statistics like, mean, standard devioation and co-efficient of variation for the replicates and visualise
+
+```{r Summary, eval=FALSE, echo=FALSE}
+summary_stats <- cytokine_long_avg %>%
+  group_by(SampleID, Protein, SampleType) %>%
+  dplyr::summarize(
+    Mean = mean(Value, na.rm = TRUE),
+    SD = sd(Value, na.rm = TRUE),
+    CV = ifelse(Mean == 0, NA, (SD / Mean) * 100),
+    Count = n()
+  )
+
+ggplot(summary_stats, aes(x = Protein, y = CV, fill = SampleType)) +
+  geom_col(position = "dodge") +
+  facet_wrap(~ SampleID) +
+  labs(x = "Protein", y = "Coefficient of Variation (%)", title = "Coefficient of Variation for Each Protein") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1, size = 5))
+```
+
+Density plots
+```{r RIF}
+cytokine_RIF <- cytokine_long_avg %>%
+  filter(Group == "RIF")
+
+rif_m <- cytokine_RIF %>%
+  dplyr::group_by(Protein, SampleType) %>%
+  dplyr::summarise(grp.median = median(Value), na.rm = TRUE) %>%
+  dplyr::ungroup()
+
+cytokine_Ctrl <- cytokine_long_avg %>%
+  filter(Group == "Ctrl")
+
+ctrl_m <- cytokine_Ctrl  %>%
+  dplyr::group_by(Protein, SampleType) %>%
+  dplyr::summarise(grp.median = median(Value), na.rm = TRUE) %>%
+  dplyr::ungroup()
+
+```
+
+```{r, fig.width=20, fig.show='hold', out.height='50%'}
+df_first_5 <- cytokine_long_avg %>%
+  filter(Protein == c("IFNg", "IL10", "IL12p70", "IL13", "IL1b"))
+
+df_first_5_median <- df_first_5 %>%
+  dplyr::group_by(Protein, SampleType, Group) %>%
+  dplyr::summarise(grp.median = median(Value, na.rm = TRUE)) %>%
+  dplyr::ungroup()
+
+df_last_5 <- cytokine_long_avg %>%
+  filter(Protein == c("IL2", "IL4", "IL6", "IL8", "TNFa"))
+
+df_last_5_median <- df_last_5 %>%
+  dplyr::group_by(Protein, SampleType, Group) %>%
+  dplyr::summarise(grp.median = median(Value), na.rm = TRUE) %>%
+  dplyr::ungroup()
+
+gg_1_density <- ggplot(df_first_5, aes(x = Value , fill = SampleType)) +
+  geom_density(alpha = 0.6) +
+  facet_nested(~ Protein + Group, scales = "fixed") +  
+  labs(x = "log Value", y = "Density", title = "Density Plot of Protein Concentrations") +
+  theme_classic() +
+  theme(legend.position = "top") +
+  geom_vline(data = df_first_5_median, aes(xintercept = grp.median, color = SampleType), linetype = "dashed") +
+  scale_x_log10()
+
+
+gg_1_density
+
+gg_2_density <- ggplot(df_last_5, aes(x = Value  , fill = SampleType)) +
+  geom_density(alpha = 0.6) +
+  facet_nested(~ Protein +Group, scales = "fixed") +
+  labs(x = "log Value", y = "Density") +
+  theme_classic() +
+  theme(legend.position = "none") +
+  geom_vline(data=df_last_5_median, aes(xintercept=grp.median, color = SampleType),
+             linetype="dashed") +
+  scale_x_log10()
+
+g1_built <- ggplot_build(gg_1_density)
+g2_built <- ggplot_build(gg_2_density)
+
+# Extract the scales from gg_ctrl_density
+xrange <- g1_built$layout$panel_scales_x[[1]]$range$range
+yrange <- g1_built$layout$panel_scales_y[[1]]$range$range
+
+# Plot the second graph
+gg_2_density +
+  #scale_x_continuous(limits = xrange)+
+  scale_y_continuous(limits = yrange)
+  
+```
+
+Ridge plots
+```{r, fig.keep='none', echo=FALSE}
+
+# Ridge plot for Control dataset
+gg_ctrl_ridge <- ggplot(cytokine_Ctrl, aes(x = Value, y = Protein, fill = SampleType)) +
+  geom_density_ridges(alpha = 0.8, scale = 0.9) +
+  scale_fill_manual(values = c("Serum" = "red", "FF" = "blue")) +  
+  theme_ridges()+
+  labs(title = "Ridge Plot of Proteins in Serum vs. FF in Control",
+       x = "Value",
+       y = "Protein",
+       fill = "Sample Type")+ 
+  theme(axis.text.y = element_text(size = 8), legend.position = "none")  
+  
+gg_ctrl_ridge
+
+# Ridge plot for RIF dataset
+gg_rif_ridge <-ggplot(cytokine_RIF, aes(x = Value, y = Protein, fill = SampleType)) +
+  geom_density_ridges(alpha = 0.8, scale = 0.9) +
+  scale_fill_manual(values = c("Serum" = "red", "FF" = "blue")) + 
+  theme_ridges() +
+  labs(title = "Ridge Plot of Proteins in Serum vs. FF in RIF",
+       x = "Value",
+       y = "Protein",
+       fill = "Sample Type") +
+  theme(axis.text.y = element_text(size = 8),  
+        legend.position = "right")  
+
+g1_built <- ggplot_build(gg_ctrl_ridge)
+g2_built <- ggplot_build(gg_rif_ridge)
+
+# Extract the scales from gg_ctrl_density
+xrange <- g1_built$layout$panel_scales_x[[1]]$range$range
+
+# Plot the second graph
+gg_rif_ridge+
+  scale_x_continuous(limits = xrange) 
+```
+
+```{r Distribution plot}
+
+# Plot a histogram to check the distrubtion
+hist(cytokine_long_avg$Value, main = "Histogram of Protein Measurements", xlab = "Protein Measurement", col = "lightblue")
+
+# histograms per protein
+ggplot(cytokine_long_avg, aes(x = Value, fill = Protein)) +
+  geom_histogram(binwidth = 0.5, color = "black") +
+  facet_wrap(~ Protein, scales = "free_x") +
+  labs(title = "Histograms of Cytokine Measurements",
+       x = "Protein Measurement",
+       y = "Frequency") +
+  theme_minimal() +
+  theme(legend.position = "none")
+```
+
+Since the data is not normally distributed, log transform it before performing ANOVA
+
+```{r ANNOVA, eval=FALSE, echo=FALSE}
+
+df_long$log_value <- log(df_long$Value + 1) 
+# Adding 1 to avoid log(0)
+hist(df_long$log_value, main = "Histogram of Protein Measurements", xlab = "Protein Measurement", col = "lightblue")
+
+anova_result <- aov(df_long$log_value ~ SampleType, data = df_long)
+summary(anova_result)
+
+# Two-way ANOVA
+t_anova <- aov(df_long$log_value ~ SampleType * Group, data = df_long )
+summary(t_anova)
+```
+Perform Th1/Th2 ratio analysis
+
+```{r, echo=FALSE, fig.keep='none'}
+# Store the cytokines as Th1 and Th2
+th_1 <- c("IFNg", "IL1b", "IL2", "TFNa", "IL12", "IL8", "IL12p70")
+th_2 <- c("IL10", "IL13", "IL6")
+
+th1_th2_ratio_df <- cytokine_long_avg %>%
+  dplyr::mutate(Th_Type = case_when(
+    Protein %in% th_1 ~ "Th1",
+    Protein %in% th_2 ~ "Th2",
+    TRUE ~ NA_character_ # If there is a value/ protein that doesn't come under defined protein
+  )) %>%
+  dplyr::filter(!is.na(Th_Type)) %>%
+  dplyr::group_by(SampleID, Group, SampleType, Th_Type) %>%
+  dplyr::summarise(
+    Mean_Value = mean(Value, na.rm = TRUE),
+    Protein_Names = paste(unique(Protein), collapse = ", ")
+  ) %>%
+  pivot_wider(names_from = Th_Type, values_from = c(Mean_Value, Protein_Names)) %>%
+  dplyr::mutate(Th1_Th2_Ratio = Mean_Value_Th1 / Mean_Value_Th2)  %>%
+  dplyr::ungroup()
+
+# Filter them by group
+th1_th2_ratio_rif <- th1_th2_ratio_df %>%
+  filter(Group == "RIF")
+th1_th2_ratio_ctrl <- th1_th2_ratio_df %>%
+  filter(Group == "Ctrl")
+
+```
+
+```{r, fig.width = 8, fig.show= "hold", out.width= "50%"}
+
+
+gg_ctrl <- ggplot(th1_th2_ratio_ctrl, aes(x = Group, y = Th1_Th2_Ratio, fill = SampleType)) +
+  geom_boxplot() +
+  labs(title = "Distribution of Th1/Th2 Ratio in Control",
+       x = "Group",
+       y = "Th1/Th2 Ratio") +
+  scale_fill_manual(values = c("orange", "blue"))+
+  theme_minimal()
+
+gg_rif <- ggplot(th1_th2_ratio_rif, aes(x = Group, y = Th1_Th2_Ratio, fill = SampleType)) +
+  geom_boxplot() +
+  labs(title = "Distribution of Th1/Th2 Ratio in RIF",
+       x = "Group",
+       y = "Th1/Th2 Ratio") +
+  scale_fill_manual(values = c("#595959", "#eb4fb2"))+
+  theme_minimal()
+
+gg_ctrl 
+
+g1_built <- ggplot_build(gg_ctrl)
+g2_built <- ggplot_build(gg_rif)
+
+yrange <- g1_built$layout$panel_scales_y[[1]]$range$range
+
+gg_rif +
+  scale_y_continuous(limits = yrange)
+```
+
+Analysis with meta data
+
+```{r}
+meta_df <- read_excel("/Users/pooja/Documents/Thesis/cytokine_data/Data/meta_data.xlsx")
+
+names(meta_df)[names(meta_df) == "FSH cd 3"] <- "FSH_cd3"
+names(meta_df)[names(meta_df) == "LH cd 3"] <- "LH_cd3"
+names(meta_df)[names(meta_df) == "Menscykellängd"] <- "Menstrual_cycle_length"
+names(meta_df)[names(meta_df) == "Graviditet"] <- "Pregnancy"
+names(meta_df)[names(meta_df) == "Födsel"] <- "Birth"
+names(meta_df)[names(meta_df) == "Ålder"] <- "Age"
+
+```
+
+```{r}
+meta_df <- meta_df %>%
+  mutate(
+    Age = as.numeric(Age),
+    BMI = as.numeric(BMI),
+    FSH_TOTALDOS = as.numeric(FSH_TOTALDOS),
+    FSH_cd3 = as.numeric(FSH_cd3),
+    LH_cd3 = as.numeric(LH_cd3),
+    Pregnancy = as.numeric(Pregnancy),
+    Birth = as.numeric(Birth),
+    Menstrual_cycle_length = as.numeric(Menstrual_cycle_length)
+  )
+table1(~ Age +BMI +FSH_TOTALDOS+ FSH_cd3 + LH_cd3 + Menstrual_cycle_length + Pregnancy + Birth, data = meta_df)
+```
+
+A graph to see the ET, Pregnancy and birth for control and RIF samples
+```{r}
+group_info <- cytokine_avg %>%
+  select(SampleID, Group)
+
+merged_df <- merge(group_info, meta_df, by = "SampleID")
+
+merged_df <- merged_df %>%
+  mutate(ET = ifelse(Group == "RIF", 0, 1))
+
+long_df <- reshape2::melt(merged_df, id.vars = "SampleID", measure.vars = c("ET", "Pregnancy", "Birth"))
+
+colnames(long_df) <- c("SampleID", "Variable", "Value")
+
+#ggplot(long_df, aes(x = Variable, y = Value, color = SampleID)) +
+##  geom_point(position = position_jitter(width = 0.1), show.legend = FALSE) +
+#  labs(title = "ET, Pregnancy, and Birth Info per Sample",
+#       x = "Variables", 
+#       y = "Values") +
+#  theme_classic() +
+#  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+ggplot(long_df, aes(x = Variable, y =SampleID , color = factor(Value))) +
+  geom_point(size = 2, alpha = 0.6) +
+  labs(x = "Variable", y = "Samples", color = "Value", title = "ET, Pregnancy and Birth info per sample") +
+  theme_classic() +
+  theme(axis.text.y = element_text(angle =0, hjust = 1, size = 5))
+```
+
+
+Merge the data frames
+
+```{r}
+selective_meta_df <- meta_df %>%
+  dplyr::select(SampleID, Age, AMH, BMI, FSH_TOTALDOS,FSH_cd3, LH_cd3, Menstrual_cycle_length, Pregnancy, Birth) %>%
+  dplyr::mutate(Pregnancy = dplyr::if_else(Pregnancy == 5, 1, Pregnancy))
+
+group_meta_df <- merge(cytokine_avg %>% select(SampleID, Group), selective_meta_df, by = "SampleID")
+
+age_df <- group_meta_df %>%
+  dplyr::select(SampleID, Age, Pregnancy, Birth) %>%
+  na.omit()
+
+# For AMH
+amh_df <- group_meta_df %>%
+  dplyr::select(SampleID, AMH, Pregnancy, Birth) %>%
+  na.omit()
+
+# For BMI
+bmi_df <- group_meta_df %>%
+  dplyr::select(SampleID, BMI, Pregnancy, Birth) %>%
+  na.omit()
+
+# For FSH_TOTALDOS
+fsh_totaldos_df <- group_meta_df %>%
+  dplyr::select(SampleID, FSH_TOTALDOS, Pregnancy, Birth) %>%
+  na.omit()
+
+# For FSH_cd3
+fsh_cd3_df <- group_meta_df %>%
+  dplyr::select(SampleID, FSH_cd3, Pregnancy, Birth) %>%
+  na.omit()
+
+# For LH_cd3
+lh_cd3_df <- group_meta_df %>%
+  dplyr::select(SampleID, LH_cd3, Pregnancy, Birth) %>%
+  na.omit()
+
+# For Menstrual_cycle_length
+menstrual_cycle_length_df <- group_meta_df %>%
+  dplyr::select(SampleID, Menstrual_cycle_length, Pregnancy, Birth) %>%
+  na.omit()
+
+```
+
+Training model- predictive modeling (a rough script, not used in the anlysis)
+```{r}
+# Load required libraries
+library(randomForest)
+
+# Prepare data
+predictors <- setdiff(names(clean_data), c("SampleID", "Group", "Pregnancy", "Birth"))
+
+# Clean the data by removing rows with NA in any of the predictors
+clean_data <- clean_data %>%
+  filter(complete.cases(.[, predictors]))  # Removes rows with NA in any of the predictor columns
+
+
+# Split the data into training and testing sets (70% for training, 30% for testing)
+train_indices <- sample(1:nrow(clean_data), 0.7 * nrow(clean_data))
+train_data <- clean_data[train_indices, ]
+test_data <- clean_data[-train_indices, ]
+
+# Split the 70% training data into 70% training and 30% validation
+valid_indices <- sample(1:nrow(train_data), 0.3 * nrow(train_data))
+valid_data <- train_data[valid_indices, ]
+train_data <- train_data[-valid_indices, ]
+
+# Convert Pregnancy to factor
+train_data$Pregnancy <- as.factor(train_data$Pregnancy)
+valid_data$Pregnancy <- as.factor(valid_data$Pregnancy)
+test_data$Pregnancy <- as.factor(test_data$Pregnancy)
+
+# Train Random Forest Model
+rf_model <- randomForest(
+  Pregnancy ~ ., 
+  data = train_data[, c(predictors, "Pregnancy")],
+  ntree = 500,
+  importance = TRUE
+)
+
+# Model Evaluation on Validation Set
+valid_predictions <- predict(rf_model, valid_data[, predictors])
+valid_confusion_matrix <- table(Predicted = valid_predictions, Actual = valid_data$Pregnancy)
+valid_accuracy <- sum(diag(valid_confusion_matrix)) / sum(valid_confusion_matrix)
+
+# Evaluate on Test Set
+test_predictions <- predict(rf_model, test_data[, predictors])
+test_confusion_matrix <- table(Predicted = test_predictions, Actual = test_data$Pregnancy)
+test_accuracy <- sum(diag(test_confusion_matrix)) / sum(test_confusion_matrix)
+
+# Variable Importance
+var_importance <- importance(rf_model)
+var_importance_df <- data.frame(
+  Variable = rownames(var_importance), 
+  Importance = var_importance[, 1]
+) %>% 
+  arrange(desc(Importance))
+
+# Plot Variable Importance
+var_importance_plot <- ggplot(var_importance_df, aes(x = reorder(Variable, Importance), y = Importance)) +
+  geom_bar(stat = "identity", fill = "skyblue") +
+  coord_flip() +
+  labs(
+    title = "Variable Importance in Pregnancy Prediction",
+    x = "Variables", 
+    y = "Importance"
+  ) +
+  theme_minimal()
+
+# Print Results
+print("Validation Accuracy:")
+print(valid_accuracy)
+
+print("Test Accuracy:")
+print(test_accuracy)
+
+print("Validation Confusion Matrix:")
+print(valid_confusion_matrix)
+
+print("Test Confusion Matrix:")
+print(test_confusion_matrix)
+
+# Optional: Save variable importance plot
+ggsave("variable_importance_plot.png", var_importance_plot, width = 10, height = 6)
+```
+
+Basic statistical analysis
+```{r}
+
+summary_stats <- meta_df %>%
+  summarise(
+    mean_age = mean(Age, na.rm = TRUE),
+    median_age = median(Age, na.rm = TRUE),
+    sd_age = sd(Age, na.rm = TRUE),
+    mean_BMI = mean(BMI, na.rm = TRUE),
+    median_BMI = median(BMI, na.rm = TRUE),
+    sd_BMI = sd(BMI, na.rm = TRUE),
+    mean_FSH = mean(FSH_cd3, na.rm = TRUE),
+    mean_LH = mean(as.numeric(LH_cd3), na.rm = TRUE)
+  )
+summary_stats
+numeric_df <- meta_df %>% select(where(is.numeric))
+
+```
+
+```{r}
+df_long_meta <- group_meta_df %>%
+  dplyr::group_by(SampleID) %>%
+  pivot_longer(cols = c(Age, BMI, AMH, FSH_TOTALDOS, FSH_cd3, LH_cd3, Pregnancy, Birth, Menstrual_cycle_length)) %>%
+  dplyr::ungroup() 
+```
+
+Visualise
+```{r, fig.keep='none', echo=FALSE}
+
+df_wide <- df_long_meta %>%
+  filter(name %in% c('FSH_TOTALDOS', 'Pregnancy', 'BMI')) %>%
+  pivot_wider(names_from = name, values_from = value) %>%
+  filter(!is.na(Pregnancy), Pregnancy != 5)
+
+ggplot(df_wide, aes(x = as.factor(Pregnancy), y = FSH_TOTALDOS)) +
+  geom_boxplot() +
+  labs(title = "FSH Levels by Pregnancy Status", x = "Pregnancy", y = "FSH Levels")
+
+ggplot(df_wide, aes(x = BMI, y = FSH_TOTALDOS)) +
+  geom_point() +
+  geom_smooth(method = "lm") +
+  labs(title = "FSH vs BMI", x = "BMI", y = "FSH")
+```
+
+
+Boxplots
+```{r, eval=FALSE, echo=FALSE, fig.keep='none'}
+# Age
+ggplot(merged_df, aes(x = Group, y = Age, fill = Group)) +
+  geom_boxplot() +
+  theme_minimal() +
+  labs(title = "Age distribution in Control and RIF groups",
+       x = "Group", y = "Age")
+# BMI
+ggplot(merged_df, aes(x = Group, y = BMI, fill = Group)) +
+  geom_boxplot() +
+  theme_minimal() +
+  labs(title = "BMI distribution in Control and RIF groups",
+       x = "Group", y = "BMI")
+
+# AMH
+ggplot(merged_df, aes(x = Group, y = AMH, fill = Group)) +
+  geom_boxplot() +
+  theme_minimal() +
+  labs(title = "AMH distribution in Control and RIF groups",
+       x = "Group", y = "AMH")
+
+# FSH Total dosage
+ggplot(merged_df, aes(x = Group, y = FSH_TOTALDOS, fill = Group)) +
+  geom_boxplot() +
+  theme_minimal() +
+  labs(title = "FSH_TOTALDOS distribution in Control and RIF groups",
+       x = "Group", y = "FSH_TOTALDOS")
+# GQE
+ggplot(merged_df, aes(x = Group, y = GQE, fill = Group)) +
+  geom_boxplot() +
+  theme_minimal() +
+  labs(title = "GQE distribution in Control and RIF groups",
+       x = "Group", y = "GQE")
+
+# Length of menstrual cycle
+ggplot(merged_df, aes(x = Group, y = Menstrual_cycle_length, fill = Group)) +
+  geom_boxplot() +
+  theme_minimal() +
+  labs(title = "Menstrual cycle length distribution in Control and RIF groups",
+       x = "Group", y = "Menstrual cycle length")
+
+# FSH
+ggplot(merged_df, aes(x = Group, y = FSH_cd3, fill = Group)) +
+  geom_boxplot() +
+  theme_minimal() +
+  labs(title = "FSH (d3) distribution in Control and RIF groups",
+       x = "Group", y = "FSH")
+
+# LH
+ggplot(merged_df, aes(x = Group, y = LH_cd3, fill = Group)) +
+  geom_boxplot() +
+  theme_minimal() +
+  labs(title = "LH (d3) distribution in Control and RIF groups",
+       x = "Group", y = "LH")
+
+# Aspirated eggs
+ggplot(merged_df, aes(x = Group, y = ASP_EGG, fill = Group)) +
+  geom_boxplot() +
+  theme_minimal() +
+  labs(title = "Aspirated egg distribution in Control and RIF groups",
+       x = "Group", y = "ASP_EGG")
+```
+
+```{r}
+# Age
+ggplot(merged_df, aes(x = Group, y = Age, fill = Group)) +
+  geom_violin(trim = FALSE, alpha = 0.6) +
+  geom_boxplot(width = 0.2, position = position_dodge(0.9), color = "black") +
+  geom_jitter(width = 0.15, color = "black", size = 1, alpha = 0.7) +
+  theme_classic() +
+  labs(title = "Age distribution in Control and RIF groups",
+       x = "Group", y = "Age")+
+  stat_compare_means(method = "t.test", label = "p.signif", label.y = 45)  
+
+# BMI
+ggplot(merged_df, aes(x = Group, y = BMI, fill = Group)) +
+  geom_violin(trim = FALSE, alpha = 0.6) +
+  geom_boxplot(width = 0.2, position = position_dodge(0.9), color = "black") +
+  geom_jitter(width = 0.15, color = "black", size = 1, alpha = 0.7) +
+  theme_minimal() +
+  labs(title = "BMI distribution in Control and RIF groups",
+       x = "Group", y = "BMI")+
+  stat_compare_means(method = "t.test", label = "p.signif", label.y = 35)  
+
+# AMH
+ggplot(merged_df, aes(x = Group, y = AMH, fill = Group)) +
+  geom_violin(trim = FALSE, alpha = 0.6) +
+  geom_boxplot(width = 0.2, position = position_dodge(0.9), color = "black") +
+  geom_jitter(width = 0.15, color = "black", size = 1, alpha = 0.7) +
+  theme_classic() +
+  labs(title = "AMH distribution in Control and RIF groups",
+       x = "Group", y = "AMH")+
+  stat_compare_means(method = "t.test", label = "p.signif", label.y = 121)  
+
+# FSH Total dosage
+ggplot(merged_df, aes(x = Group, y = FSH_TOTALDOS, fill = Group)) +
+  geom_violin(trim = FALSE, alpha = 0.6) +
+  geom_boxplot(width = 0.2, position = position_dodge(0.9), color = "black") +
+  geom_jitter(width = 0.15, color = "black", size = 1, alpha = 0.7) +
+  theme_classic() +
+  labs(title = "FSH_TOTALDOS distribution in Control and RIF groups",
+       x = "Group", y = "FSH_TOTALDOS")+
+  stat_compare_means(method = "t.test", label = "p.signif", label.y = 4500)  
+
+# GQE
+ggplot(merged_df, aes(x = Group, y = GQE, fill = Group)) +
+  geom_violin(trim = FALSE, alpha = 0.6) +
+  geom_boxplot(width = 0.2, position = position_dodge(0.9), color = "black") +
+  geom_jitter(width = 0.15, color = "black", size = 1, alpha = 0.7) +
+  theme_classic() +
+  labs(title = "GQE distribution in Control and RIF groups",
+       x = "Group", y = "GQE")+
+  stat_compare_means(method = "t.test", label = "p.signif", label.y = 7)  
+
+# Menstrual cycle length
+ggplot(merged_df, aes(x = Group, y = Menstrual_cycle_length, fill = Group)) +
+  geom_violin(trim = FALSE, alpha = 0.6) +
+  geom_boxplot(width = 0.2, position = position_dodge(0.9), color = "black") +
+  geom_jitter(width = 0.15, color = "black", size = 1, alpha = 0.7) +
+  theme_classic() +
+  labs(title = "Menstrual cycle length distribution in Control and RIF groups",
+       x = "Group", y = "Menstrual cycle length")+
+  stat_compare_means(method = "t.test", label = "p.signif", label.y =50)  
+
+# FSH
+ggplot(merged_df, aes(x = Group, y = FSH_cd3, fill = Group)) +
+  geom_violin(trim = FALSE, alpha = 0.6) +
+  geom_boxplot(width = 0.2, position = position_dodge(0.9), color = "black") +
+  geom_jitter(width = 0.15, color = "black", size = 1, alpha = 0.7) +
+  theme_classic() +
+  labs(title = "FSH (d3) distribution in Control and RIF groups",
+       x = "Group", y = "FSH")+
+  stat_compare_means(method = "t.test", label = "p.signif", label.y = max(merged_df$FSH_cd3))  
+
+# LH
+ggplot(merged_df, aes(x = Group, y = LH_cd3, fill = Group)) +
+  geom_violin(trim = FALSE, alpha = 0.6) +
+  geom_boxplot(width = 0.2, position = position_dodge(0.9), color = "black") +
+  geom_jitter(width = 0.15, color = "black", size = 1, alpha = 0.7) +
+  theme_classic() +
+  labs(title = "LH (d3) distribution in Control and RIF groups",
+       x = "Group", y = "LH")
+
+# Aspirated eggs
+ggplot(merged_df, aes(x = Group, y = ASP_EGG, fill = Group)) +
+  geom_violin(trim = FALSE, alpha = 0.6) +
+  geom_boxplot(width = 0.2, position = position_dodge(0.9), color = "black") +
+  geom_jitter(width = 0.15, color = "black", size = 1, alpha = 0.7) +
+  theme_classic() +
+  labs(title = "Aspirated egg distribution in Control and RIF groups",
+       x = "Group", y = "ASP_EGG")
+```
+
+Handling missing data - not used in analysis
+```{r, message=FALSE, results='hide'}
+
+imputed_df <- group_meta_df %>%
+  dplyr::mutate(
+    Age = if_else(is.na(Age), median(group_meta_df$Age, na.rm = TRUE), Age),
+    Menstrual_cycle_length = if_else(is.na(Menstrual_cycle_length), median(group_meta_df$Menstrual_cycle_length, na.rm = TRUE), Menstrual_cycle_length),
+    Pregnancy = if_else(is.na(Pregnancy) & Group == "RIF", 0, 
+                        if_else(is.na(Pregnancy) & Group == "Ctrl", 1, Pregnancy)),
+    Birth = if_else(is.na(Birth) & Group == "RIF", 0, 
+                    if_else(is.na(Birth) & Group == "Ctrl", 1, Birth))
+  ) 
+
+imputed_df$Pregnancy <- as.factor(imputed_df$Pregnancy)
+imputed_df$Birth <- as.factor(imputed_df$Birth)
+
+# Perform multiple imputation
+imputed_data <- mice(imputed_df %>% select(-c(SampleID, Group, Pregnancy, Birth, Menstrual_cycle_length)), m = 5, method = "pmm", seed = 123)
+
+# Check the summary of the imputed data
+summary(imputed_data)
+
+stripplot(imputed_data, pch = 20, cex = 1.2)
+
+completed_df <- complete(imputed_data)
+
+# Combine the original columns (Pregnancy, Birth, SampleID) with the imputed data
+imputed_df_final <- bind_cols(imputed_df %>% select(SampleID, Group, Pregnancy, Birth), completed_df)
+
+cytokine_meta_df <- merge(cytokine_avg, imputed_df_final, by = c("SampleID", "Group")) %>%
+  select(-PC2, -PC1, -cluster_id)
+
+write.csv(cytokine_meta_df, "cytokine_meta_df.csv", row.names = FALSE)
+
+```
+
+```{r, out.width='50%', fig.show='hold', warning=FALSE, message=FALSE}
+# Histograms
+variables <- unique(df_long_meta$name)
+
+df_long_imp <- imputed_df_final %>%
+  dplyr::group_by(SampleID) %>%
+  pivot_longer(cols = c(Age, BMI, AMH, FSH_TOTALDOS, FSH_cd3, LH_cd3)) %>%
+  dplyr::ungroup() 
+
+variables_imp <- unique(df_long_imp$name)
+for (var in variables_imp) {
+  
+  min_value <- min(c(df_long_meta %>% filter(name == var) %>% pull(value), 
+                     df_long_imp %>% filter(name == var) %>% pull(value)))
+  max_value <- max(c(df_long_meta %>% filter(name == var) %>% pull(value), 
+                     df_long_imp %>% filter(name == var) %>% pull(value)))
+    max_y <- max(
+    c(
+      max(ggplot_build(ggplot(df_long_meta %>% filter(name == var), aes(x = value)) +
+                       geom_histogram(fill = "blue", alpha = 0.7) +
+                       theme_classic())$data[[1]]$count),
+      max(ggplot_build(ggplot(df_long_imp %>% filter(name == var), aes(x = value)) +
+                       geom_histogram(fill = "blue", alpha = 0.7) +
+                       theme_classic())$data[[1]]$count)
+    )
+  )
+  # Plot 1: Histogram for df_long_meta
+  p <- ggplot(df_long_meta %>% filter(name == var), aes(x = value)) +
+    geom_histogram(fill = "blue", alpha = 0.7) +
+    labs(title = paste(var, "Distribution"), x = paste(var, "(original)"), y = "Count") +
+    theme_classic() +
+    xlim(min_value, max_value) +  
+    ylim(0,max_y)  
+  
+  print(p)
+  
+  # Plot 2: Histogram for df_long_imp
+  p2 <- ggplot(df_long_imp %>% filter(name == var), aes(x = value)) +
+    geom_histogram(fill = "#eb4fb2", alpha = 0.7) +
+    labs(title = paste(var, "Distribution"), x = paste(var, "(imputed)"), y = "Count") +
+    theme_classic() +
+    xlim(min_value, max_value) +
+    ylim(0, max_y)  
+  print(p2)
+  
+}
+
+
+```
+
+PCA on imputed data - not used in analysis
+
+```{r}
+pca_variables <- imputed_df_final
+
+numeric_data <- as.matrix(pca_variables[ , -c(1:5)])
+
+numeric_data <- apply(numeric_data, 2, as.numeric)
+
+# Perform PCA
+pca_met <- prcomp(numeric_data, center = TRUE, scale. = TRUE)
+
+autoplot(pca_met, data = pca_variables, colour = 'Group') +
+  scale_color_manual(values = c("#595959", "#eb4fb2")) + 
+  theme_minimal() +
+  labs(title = "PCA")+
+  geom_text_repel(aes(label = SampleID), size = 3)
+
+meta_data_var_plot <- fviz_pca_var(pca_met, col.var = "contrib", repel = TRUE, labelsize=2)
+meta_data_var_plot
+
+fviz_pca_ind(pca_met,
+              geom.ind = "point",
+              col.ind = pca_variables$Group,
+              label= "SampleID", 
+              addEllipses = FALSE,
+              legend.title = "Group") +
+  scale_color_manual(values = c("#595959", "#eb4fb2"))+
+  labs(title = "PCA of all Samples by Group") +
+  theme_minimal()
+
+meta_data_var_plot <- as.data.frame(meta_data_var_plot$data)
+
+meta_data_var_plot <- meta_data_var_plot[order(meta_data_var_plot$x, decreasing = T),]
+
+meta_data_var_plot$name <- factor(meta_data_var_plot$name, levels = meta_data_var_plot$name)
+
+ggplot(meta_data_var_plot, aes(x=name, y=x)) +
+  geom_segment( aes(x=name, xend=name, y=0, yend=x), color="grey") +
+  geom_point( color="#A5AA99", size=4) +
+  theme_classic() +
+  theme(
+    panel.grid.major.x = element_blank(),
+    panel.border = element_blank(),
+    axis.ticks.x = element_blank(),
+    axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1)) +
+  xlab("") +
+  ylab("Contribution to PC1")+ coord_flip()
+
+```
+
+
+Clean up the data based on completeness of the meta data
+```{r}
+data <- merge(cytokine_avg, selective_meta_df, by = "SampleID")
+
+# Function to identify columns with actual data
+check_data_completeness <- function(df) {
+  n_complete <- colSums(!is.na(df))
+  n_total <- nrow(df)
+  
+  # Calculate percentage of complete cases
+  pct_complete <- (n_complete/n_total) * 100
+  
+  completeness <- data.frame(
+    Variable = names(pct_complete),
+    Complete_Cases = n_complete,
+    Percent_Complete = pct_complete
+  )
+  
+  return(completeness[order(-completeness$Percent_Complete),])
+}
+
+completeness <- check_data_completeness(data)
+
+usable_vars <- completeness$Variable[completeness$Percent_Complete > 50]
+
+cytokine_cols <- grep("^(Serum|FF)_(IFNg|IL|TNFa)", usable_vars, value = TRUE)
+meta_cols <- setdiff(usable_vars, cytokine_cols)
+
+# Remove non-numeric columns from meta_cols
+numeric_meta_cols <- meta_cols[sapply(data[meta_cols], is.numeric)]
+
+clean_numeric_data <- data[complete.cases(data[c("SampleID", "Group", numeric_meta_cols)]), ]
+
+# Subset clean data to include cytokine columns, numeric meta columns, and also SampleID and Group
+clean_data <- clean_numeric_data[, c("SampleID", "Group", cytokine_cols, numeric_meta_cols)]
+
+# Check completeness again for the clean data
+completeness <- check_data_completeness(clean_data)
+
+
+```
+Logistic regression analysis
+```{r, warning=FALSE, message=FALSE}
+#data <- read.csv("/Users/pooja/Documents/Thesis/cytokine_data/rmd_files/cytokine_meta_df.csv")
+
+prepare_data <- function(df) {
+  
+  # Convert Pregnancy to factor (verify the exact column name first)
+  if("Pregnancy" %in% names(df)) {
+    df$Pregnancy <- as.factor(df$Pregnancy)
+  } else {
+    stop("Pregnancy column not found in dataset")
+  }
+  
+  # Get cytokine columns - print to verify
+  cytokine_cols <- grep("^(Serum|FF)_(IFNg|IL|TNFa)", names(df), value = TRUE)
+  #print("Found cytokine columns:")
+  #print(cytokine_cols)
+  
+  # Get clinical columns that exist in the data
+  clinical_cols <- c("Age", "BMI", "FSH_cd3", "FSH_TOTALDOS","Menstrual_cycle_length" )
+  existing_clinical_cols <- clinical_cols[clinical_cols %in% names(df)]
+  #print("Found clinical columns:")
+  #print(existing_clinical_cols)
+  
+  # Combine all predictor columns
+  predictor_cols <- c(cytokine_cols, existing_clinical_cols)
+  
+  if(length(predictor_cols) == 0) {
+    stop("No predictor columns found matching the specified patterns")
+  }
+  
+  # Select only complete cases for these variables
+  complete_data <- df[, c("Pregnancy", predictor_cols)]
+  complete_data <- na.omit(complete_data)
+  
+  return(list(
+    data = complete_data,
+    predictors = predictor_cols
+  ))
+}
+
+run_univariate_models <- function(data, predictors) {
+  results <- data.frame(
+    Predictor = character(),
+    Coefficient = numeric(),
+    Std_Error = numeric(),
+    P_value = numeric(),
+    OR = numeric(),
+    OR_CI_Lower = numeric(),
+    OR_CI_Upper = numeric(),
+    AUC = numeric(),
+    stringsAsFactors = FALSE
+  )
+  
+  for(pred in predictors) {
+    # Create formula
+    formula <- as.formula(paste("Pregnancy ~", pred))
+    
+    # Fit model
+    model <- tryCatch({
+      glm(formula, data = data, family = "binomial")
+    }, error = function(e) NULL)
+    
+    if(!is.null(model)) {
+      # Get model summary
+      summary_stats <- summary(model)
+      coef_stats <- summary_stats$coefficients[2,]
+      
+      # Calculate odds ratio and CI
+      or <- exp(coef_stats[1])
+      ci <- exp(confint(model))[2,]
+      
+      # Calculate AUC
+      pred_prob <- predict(model, type = "response")
+      roc_obj <- roc(data$Pregnancy, pred_prob)
+      auc <- auc(roc_obj)
+      
+      # Add to results
+      results <- rbind(results, data.frame(
+        Predictor = pred,
+        Coefficient = coef_stats[1],
+        Std_Error = coef_stats[2],
+        P_value = coef_stats[4],
+        OR = or,
+        OR_CI_Lower = ci[1],
+        OR_CI_Upper = ci[2],
+        AUC = auc
+      ))
+    }
+  }
+  
+  return(results)
+}
+
+# Function to run multivariate logistic regression
+run_multivariate_model <- function(data, predictors) {
+  # Create formula with all predictors
+  formula <- as.formula(paste("Pregnancy ~", paste(predictors, collapse = " + ")))
+  
+  # Fit model
+  model <- glm(formula, data = data, family = "binomial")
+  
+  # Get summary statistics
+  summary_stats <- summary(model)
+  
+  # Calculate odds ratios and CIs
+  or <- exp(coef(model))
+  ci <- exp(confint(model))
+  
+  # Create results table
+  results <- data.frame(
+    Predictor = names(coef(model)),
+    Coefficient = coef(model),
+    Std_Error = summary_stats$coefficients[,2],
+    P_value = summary_stats$coefficients[,4],
+    OR = or,
+    OR_CI_Lower = ci[,1],
+    OR_CI_Upper = ci[,2]
+  )
+  
+  # Calculate model performance metrics
+  pred_prob <- predict(model, type = "response")
+  roc_obj <- roc(data$Pregnancy, pred_prob)
+  auc <- auc(roc_obj)
+  
+  return(list(
+    results = results,
+    model = model,
+    auc = auc,
+    roc = roc_obj
+  ))
+}
+
+# Prepare data
+prepared_data <- prepare_data(clean_data)
+
+# Run univariate models
+univariate_results <- run_univariate_models(prepared_data$data, prepared_data$predictors)
+
+# Sort by p-value
+univariate_results <- univariate_results[order(univariate_results$P_value),]
+
+# Print univariate results
+cat("\nUnivariate Logistic Regression Results:\n")
+kable(univariate_results, row.names = FALSE)
+  
+write.table(univariate_results, file = "/Users/pooja/Documents/Thesis/cytokine_data/results for lab day/univariate_results.txt", sep = "\t", row.names = FALSE, quote = FALSE)
+
+#library(officer)
+#library(flextable)
+#ft <- flextable(univariate_results) %>%
+#  autofit() %>%
+##  theme_vanilla()
+
+# Save the table as an image
+#save_as_image(ft, path = "Documents/Thesis/cytokine_data/result_figs/univariate_results.png")
+
+# Select significant predictors (p < 0.05) for multivariate model
+significant_predictors <- univariate_results$Predictor[univariate_results$P_value < 0.05]
+
+if(length(significant_predictors) > 0) {
+  # Run multivariate model
+  multivariate_results <- run_multivariate_model(prepared_data$data, significant_predictors)
+  
+  # Save multivariate results as table
+  #write.table(multivariate_results$results, file = "Documents/Thesis/cytokine_data/results for lab day/multivariate_results.txt", row.names = FALSE, sep = "\t")
+  
+  # Print multivariate results
+  cat("\nMultivariate Logistic Regression Results:\n")
+  kable(multivariate_results$results, row.names = FALSE)
+  cat("\nModel AUC:", round(multivariate_results$auc, 3), "\n")
+  
+  # Save ROC plot as PNG
+  png("Documents/Thesis/cytokine_data/results for lab day/roc_curve.png")
+  plot(multivariate_results$roc, main = "ROC Curve - Multivariate Model")
+  dev.off()
+  
+  # Calculate VIF for multicollinearity and save as table
+  if(length(significant_predictors) > 1) {
+    vif_results <- car::vif(multivariate_results$model)
+    write.table(vif_results, file = "Documents/Thesis/cytokine_data/results for lab day/vif_results.txt", row.names = TRUE, sep = "\t")
+    cat("\nVariance Inflation Factors (VIF):\n")
+    kable(vif_results)
+  }
+} else {
+  cat("\nNo significant predictors found for multivariate model\n")
+}
+
+
+write.table(multivariate_results, file = "/Users/pooja/Documents/Thesis/cytokine_data/results for lab day/multivariate_results.txt", sep = "\t", row.names = FALSE, quote = FALSE)
+# Print interpretation guidelines
+#cat("\nInterpretation guidelines:\n")
+#cat("1. OR > 1 indicates increased odds of pregnancy\n")
+#cat("2. OR < 1 indicates decreased odds of pregnancy\n")
+#cat("3. P-value < 0.05 indicates statistical significance\n")
+#cat("4. AUC ranges from 0.5 (random) to 1.0 (perfect prediction)\n")
+#cat("5. VIF > 5 suggests potential multicollinearity\n")
+
+```
+
+```{r}
+# Check for perfect separation
+table(prepared_data$data$Pregnancy, prepared_data$predictors)
+
+# Apply penalized regression for stability
+library(glmnet)
+x <- model.matrix(~ ., data = prepared_data$data[, significant_predictors])
+y <- prepared_data$data$outcome
+cv_fit <- cv.glmnet(x, y, family = "binomial")
+best_lambda <- cv_fit$lambda.min
+
+# Fit the penalized logistic regression
+final_model <- glmnet(x, y, family = "binomial", lambda = best_lambda)
+
+# Generate predicted probabilities
+predicted_probs <- predict(final_model, s = best_lambda, type = "response")
+
+# Check for missing or invalid values
+summary(predicted_probs)
+
+# Plot ROC Curve after resolving data issues
+library(pROC)
+roc_curve <- roc(y, predicted_probs)
+png("Documents/Thesis/cytokine_data/result_figs/roc_curve.png")
+plot(roc_curve, main = "ROC Curve - Penalized Logistic Regression")
+dev.off()
+
+```
+
+
+```{r}
+library(report)
+cite_packages()
+```
+
+```{r session info}
+sessionInfo()
+```
