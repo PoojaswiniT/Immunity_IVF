@@ -10,10 +10,14 @@ In this study we utilized **single-cell RNA sequencing analysis** and **proteome
 - Examine the impact of immune responses on reproductive success.
 
 ## Key Methods
-
+- **Single-cell RNA sequencing analysis** followed standard **Seurat** workflow.
 - **Sex hormone receptor expression profiling** on PBMCs and menstrual effluent samples.
 - **Differential gene expression** and **gene set enrichment analysis (GSEA)**.
 - **Immune proteomic profiling** of serum and follicular fluid from IVF patients.
+
+## Software and package versions
+- **R version 4.4.2**
+- **Seurat version 5.1.0**
 
 # Repository Structure
 
@@ -85,4 +89,4 @@ This folder contains the script that analyzes the proteomic dataset requested fr
 - It performs logistic regression analysis to identify the factors associated with pregnancy outcomes, including protein concentrations in serum, follicular fluid
   and clinical characteristics like, age, BMI, menstrual cycle length.
 
-Some instructions and comments are also present within all the scripts, along with, session information and package versions used for reproducibility.
+Some instructions and comments are also present within all the scripts, along with, session information.
